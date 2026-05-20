@@ -117,6 +117,7 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
+        import os
         ydl_opts = {
             'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
             'quiet': True,
@@ -124,17 +125,14 @@ class YouTubeMusicAPI:
             'extract_flat': False,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web_music', 'android_music', 'web'],
+                    'player_client': ['tv_embedded', 'android', 'ios'],
                 }
             },
-            'http_headers': {
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/124.0.0.0 Safari/537.36'
-                ),
-            },
         }
+
+        cookies_path = '/app/cookies.txt'
+        if os.path.exists(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
