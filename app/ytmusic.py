@@ -118,7 +118,7 @@ class YouTubeMusicAPI:
 
     async def get_stream_url(self, video_id: str) -> Optional[str]:
         # Try Invidious instances first (bypasses server IP flagging)
-        url = await self._get_stream_url_invidious(video_id)
+        url = await self._get_stream_url_piped(video_id)
         if url:
             return url
 
@@ -143,31 +143,26 @@ class YouTubeMusicAPI:
             print(f"yt-dlp fallback failed for {video_id}: {e}")
             return None
 
-    async def _get_stream_url_invidious(self, video_id: str) -> Optional[str]:
+    async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
         instances = [
-            "https://invidious.privacyredirect.com",
-            "https://inv.nadeko.net",
-            "https://invidious.nerdvpn.de",
+            "https://api.piped.private.coffee",
         ]
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             for instance in instances:
                 try:
-                    r = await client.get(f"{instance}/api/v1/videos/{video_id}")
+                    r = await client.get(f"{instance}/streams/{video_id}")
                     if r.status_code != 200:
                         continue
+                    if 'application/json' not in r.headers.get('content-type', ''):
+                        continue
                     data = r.json()
-                    audio_formats = [
-                        f for f in data.get('adaptiveFormats', [])
-                        if f.get('type', '').startswith('audio/')
-                    ]
-                    if audio_formats:
-                        audio_formats.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-                        stream_url = audio_formats[0].get('url')
-                        if stream_url:
-                            print(f"Invidious stream via {instance}")
-                            return stream_url
+                    audio_streams = data.get('audioStreams', [])
+                    stream_url = next((s['url'] for s in audio_streams if s.get('url')), None)
+                    if stream_url:
+                        print(f"Piped stream via {instance}")
+                        return stream_url
                 except Exception as e:
-                    print(f"Invidious {instance} failed: {e}")
+                    print(f"Piped {instance} failed: {e}")
         return None
 
 ytmusic_api = YouTubeMusicAPI()
