@@ -664,7 +664,9 @@ function App() {
           }
         } catch (_) { continue; }
       }
-      playLocalPreview(track, 'Could not resolve stream.', startPositionMs);
+      // All browser-side Piped instances failed — fall back to backend proxy (uses yt-dlp with cookies)
+      const backendUrl = `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track.track_id)}`;
+      playLocalPreview({ ...track, preview_url: backendUrl }, null, startPositionMs);
     } catch (err) {
       playLocalPreview(track, 'Error contacting stream API.', startPositionMs);
     }

@@ -1,6 +1,9 @@
 import re
 import asyncio
+import shutil
+import os
 import httpx
+import yt_dlp
 from ytmusicapi import YTMusic
 from typing import List, Dict, Any, Optional
 
@@ -116,7 +119,45 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     async def get_stream_url(self, video_id: str) -> Optional[str]:
-        return await self._get_stream_url_piped(video_id)
+        url = await self._get_stream_url_piped(video_id)
+        if url:
+            return url
+        return await asyncio.get_event_loop().run_in_executor(None, self._get_stream_url_ytdlp, video_id)
+
+    def _get_stream_url_ytdlp(self, video_id: str) -> Optional[str]:
+        cookies_src = "/app/cookies.txt"
+        cookies_tmp = "/tmp/yt_cookies.txt"
+        if os.path.isfile(cookies_src):
+            shutil.copy2(cookies_src, cookies_tmp)
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "extractor_args": {"youtube": {"player_client": ["ios"]}},
+        }
+        if os.path.isfile(cookies_tmp):
+            ydl_opts["cookiefile"] = cookies_tmp
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(
+                    f"https://www.youtube.com/watch?v={video_id}",
+                    download=False
+                )
+                url = info.get("url")
+                if not url and info.get("formats"):
+                    for fmt in reversed(info["formats"]):
+                        if fmt.get("url") and fmt.get("acodec") != "none":
+                            url = fmt["url"]
+                            break
+                if url:
+                    print(f"yt-dlp stream for {video_id}")
+                return url
+        except Exception as e:
+            print(f"yt-dlp failed for {video_id}: {e}")
+            return None
 
     async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
         instances = [
