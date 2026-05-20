@@ -117,39 +117,48 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
-        import os
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_music', 'android', 'mweb'],
-                }
-            },
-        }
+        import os, shutil
+        video_url = f"https://music.youtube.com/watch?v={video_id}"
 
         cookies_src = '/app/cookies.txt'
         cookies_path = '/tmp/yt_cookies.txt'
         if os.path.exists(cookies_src) and not os.path.exists(cookies_path):
-            import shutil
             shutil.copy2(cookies_src, cookies_path)
-        if os.path.exists(cookies_path):
-            ydl_opts['cookiefile'] = cookies_path
+        has_cookies = os.path.exists(cookies_path)
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(
-                    f"https://music.youtube.com/watch?v={video_id}",
-                    download=False
-                )
-                url = info.get('url')
-                if not url and info.get('formats'):
-                    url = info['formats'][-1].get('url')
-                return url
-        except Exception as e:
-            print(f"yt-dlp error for {video_id}: {e}")
-            return None
+        def _extract(opts):
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(video_url, download=False)
+                    url = info.get('url')
+                    if not url and info.get('formats'):
+                        for f in reversed(info['formats']):
+                            if f.get('url') and f.get('acodec') != 'none':
+                                return f['url']
+                    return url
+            except Exception as e:
+                print(f"yt-dlp attempt failed for {video_id}: {e}")
+                return None
+
+        # Attempt 1: android without cookies (android skips when cookies present)
+        result = _extract({
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'extractor_args': {'youtube': {'player_client': ['android_music', 'android']}},
+        })
+        if result:
+            return result
+
+        # Attempt 2: web with cookies
+        if has_cookies:
+            result = _extract({
+                'format': 'bestaudio/best',
+                'quiet': True,
+                'no_warnings': True,
+                'cookiefile': cookies_path,
+                'extractor_args': {'youtube': {'player_client': ['web_music', 'web']}},
+            })
+        return result
 
 ytmusic_api = YouTubeMusicAPI()
