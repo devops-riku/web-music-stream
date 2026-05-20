@@ -119,7 +119,7 @@ class YouTubeMusicAPI:
     def get_stream_url(self, video_id: str) -> Optional[str]:
         import os
         ydl_opts = {
-            'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+            'format': 'bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
@@ -130,7 +130,11 @@ class YouTubeMusicAPI:
             },
         }
 
-        cookies_path = '/app/cookies.txt'
+        cookies_src = '/app/cookies.txt'
+        cookies_path = '/tmp/yt_cookies.txt'
+        if os.path.exists(cookies_src) and not os.path.exists(cookies_path):
+            import shutil
+            shutil.copy2(cookies_src, cookies_path)
         if os.path.exists(cookies_path):
             ydl_opts['cookiefile'] = cookies_path
 
