@@ -119,9 +119,15 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     async def get_stream_url(self, video_id: str) -> Optional[str]:
+        # 1) Try Piped instances (they proxy YouTube for us)
         url = await self._get_stream_url_piped(video_id)
         if url:
             return url
+        # 2) Try Invidious instances
+        url = await self._get_stream_url_invidious(video_id)
+        if url:
+            return url
+        # 3) Fall back to yt-dlp (will fail if YouTube is blocked from this server)
         return await asyncio.get_event_loop().run_in_executor(None, self._get_stream_url_ytdlp, video_id)
 
     def _get_stream_url_ytdlp(self, video_id: str) -> Optional[str]:
@@ -161,7 +167,20 @@ class YouTubeMusicAPI:
 
     async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
         instances = [
+            "https://pipedapi.kavin.rocks",
             "https://api.piped.private.coffee",
+            "https://pipedapi.r4fo.com",
+            "https://pipedapi.adminforge.de",
+            "https://pipedapi.in.projectsegfau.lt",
+            "https://pipedapi.us.projectsegfau.lt",
+            "https://api.piped.yt",
+            "https://pipedapi.darkness.services",
+            "https://piped-api.hostux.net",
+            "https://pipedapi.drgns.space",
+            "https://pipedapi.smnz.de",
+            "https://piapi.ggtyler.dev",
+            "https://pipedapi.reallyaweso.me",
+            "https://pipedapi.leptons.xyz",
         ]
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             for instance in instances:
@@ -173,12 +192,53 @@ class YouTubeMusicAPI:
                         continue
                     data = r.json()
                     audio_streams = data.get('audioStreams', [])
-                    stream_url = next((s['url'] for s in audio_streams if s.get('url')), None)
-                    if stream_url:
-                        print(f"Piped stream via {instance}")
-                        return stream_url
+                    # Pick the highest bitrate audio stream
+                    audio_streams = [s for s in audio_streams if s.get('url')]
+                    if not audio_streams:
+                        continue
+                    audio_streams.sort(key=lambda s: s.get('bitrate', 0), reverse=True)
+                    stream_url = audio_streams[0]['url']
+                    print(f"Piped stream via {instance}")
+                    return stream_url
                 except Exception as e:
                     print(f"Piped {instance} failed: {e}")
         return None
 
+    async def _get_stream_url_invidious(self, video_id: str) -> Optional[str]:
+        instances = [
+            "https://invidious.fdn.fr",
+            "https://yewtu.be",
+            "https://invidious.nerdvpn.de",
+            "https://invidious.perennialte.ch",
+            "https://inv.nadeko.net",
+            "https://invidious.materialio.us",
+            "https://invidious.privacyredirect.com",
+            "https://invidious.protokolla.fi",
+            "https://iv.datura.network",
+            "https://invidious.lunar.icu",
+        ]
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            for instance in instances:
+                try:
+                    r = await client.get(f"{instance}/api/v1/videos/{video_id}")
+                    if r.status_code != 200:
+                        continue
+                    if 'application/json' not in r.headers.get('content-type', ''):
+                        continue
+                    data = r.json()
+                    audio_formats = [
+                        f for f in data.get('adaptiveFormats', [])
+                        if f.get('type', '').startswith('audio/') and f.get('url')
+                    ]
+                    if not audio_formats:
+                        continue
+                    audio_formats.sort(key=lambda f: int(f.get('bitrate', '0') if f.get('bitrate') else '0'), reverse=True)
+                    stream_url = audio_formats[0]['url']
+                    print(f"Invidious stream via {instance}")
+                    return stream_url
+                except Exception as e:
+                    print(f"Invidious {instance} failed: {e}")
+        return None
+
 ytmusic_api = YouTubeMusicAPI()
+
