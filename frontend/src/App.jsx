@@ -645,11 +645,19 @@ function App() {
     }
 
     try {
-      const proxyUrl = `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track.track_id)}`;
-      const streamingTrack = { ...track, preview_url: proxyUrl };
-      playLocalPreview(streamingTrack, null, startPositionMs);
+      const piped = 'https://api.piped.private.coffee';
+      const res = await fetch(`${piped}/streams/${encodeURIComponent(track.track_id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const audio = (data.audioStreams || []).find(s => s.url);
+        if (audio?.url) {
+          playLocalPreview({ ...track, preview_url: audio.url }, null, startPositionMs);
+          return;
+        }
+      }
+      playLocalPreview(track, 'Could not resolve stream.', startPositionMs);
     } catch (err) {
-      playLocalPreview(track, 'Error contacting stream backend.', startPositionMs);
+      playLocalPreview(track, 'Error contacting stream API.', startPositionMs);
     }
   };
 
