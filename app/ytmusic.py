@@ -141,7 +141,7 @@ class YouTubeMusicAPI:
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
-            "extractor_args": {"youtube": {"player_client": ["ios"]}},
+            "extractor_args": {"youtube": {"player_client": ["mweb", "android_music", "tv"]}},
         }
         if os.path.isfile(cookies_tmp):
             ydl_opts["cookiefile"] = cookies_tmp
