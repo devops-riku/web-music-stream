@@ -3,7 +3,6 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.backend
-    image: web-music-stream-backend:latest
     container_name: web-music-stream-backend
     env_file: .env
     depends_on:
@@ -27,7 +26,6 @@ services:
       args:
         VITE_BACKEND_API: https://${DOMAIN}
         VITE_BACKEND_WS: wss://${DOMAIN}
-    image: web-music-stream-frontend:latest
     container_name: web-music-stream-frontend
     restart: unless-stopped
     labels:
