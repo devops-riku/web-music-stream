@@ -312,7 +312,7 @@ async def get_liked_tracks(
 
 @app.get("/api/player/stream")
 async def proxy_stream(request: Request, id: str = Query(..., description="YouTube Video ID")):
-    url = ytmusic_api.get_stream_url(id)
+    url = await ytmusic_api.get_stream_url(id)
     if not url:
         raise HTTPException(status_code=404, detail="Could not extract stream URL.")
 

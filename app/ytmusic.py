@@ -116,9 +116,9 @@ class YouTubeMusicAPI:
         # Fallback: search for popular tracks
         return self.search("top hits 2024", limit=limit)
 
-    def get_stream_url(self, video_id: str) -> Optional[str]:
+    async def get_stream_url(self, video_id: str) -> Optional[str]:
         # Try Invidious instances first (bypasses server IP flagging)
-        url = asyncio.run(self._get_stream_url_invidious(video_id))
+        url = await self._get_stream_url_invidious(video_id)
         if url:
             return url
 
