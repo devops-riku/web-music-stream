@@ -1,7 +1,6 @@
 import re
 import asyncio
 import httpx
-import yt_dlp
 from ytmusicapi import YTMusic
 from typing import List, Dict, Any, Optional
 
@@ -117,31 +116,7 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     async def get_stream_url(self, video_id: str) -> Optional[str]:
-        # Try Invidious instances first (bypasses server IP flagging)
-        url = await self._get_stream_url_piped(video_id)
-        if url:
-            return url
-
-        # Fallback: yt-dlp android client without cookies
-        try:
-            with yt_dlp.YoutubeDL({
-                'format': 'bestaudio/best',
-                'quiet': True,
-                'no_warnings': True,
-                'extractor_args': {'youtube': {'player_client': ['android_music', 'android']}},
-            }) as ydl:
-                info = ydl.extract_info(
-                    f"https://music.youtube.com/watch?v={video_id}", download=False
-                )
-                stream = info.get('url')
-                if not stream and info.get('formats'):
-                    for f in reversed(info['formats']):
-                        if f.get('url') and f.get('acodec') != 'none':
-                            return f['url']
-                return stream
-        except Exception as e:
-            print(f"yt-dlp fallback failed for {video_id}: {e}")
-            return None
+        return await self._get_stream_url_piped(video_id)
 
     async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
         instances = [
