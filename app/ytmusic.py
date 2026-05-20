@@ -117,22 +117,35 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
-        """
-        Extract the direct audio stream URL using yt-dlp.
-        """
+        import os
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['tv_embedded', 'android', 'ios'],
+                }
+            },
         }
-        
+
+        cookies_path = '/app/cookies.txt'
+        if os.path.exists(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-                return info.get('url')
+                info = ydl.extract_info(
+                    f"https://music.youtube.com/watch?v={video_id}",
+                    download=False
+                )
+                url = info.get('url')
+                if not url and info.get('formats'):
+                    url = info['formats'][-1].get('url')
+                return url
         except Exception as e:
-            print(f"yt-dlp error: {e}")
+            print(f"yt-dlp error for {video_id}: {e}")
             return None
 
 ytmusic_api = YouTubeMusicAPI()
