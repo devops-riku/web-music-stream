@@ -11,7 +11,7 @@ services:
       db_rikupy:
         condition: service_healthy
     volumes:
-      - ../data/www.youtube.com_cookies.txt:/app/cookies.txt:ro
+      - ../data/cookies.txt:/app/cookies.txt:ro
     restart: unless-stopped
     labels:
       - traefik.enable=true
