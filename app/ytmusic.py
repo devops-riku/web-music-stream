@@ -160,8 +160,13 @@ class YouTubeMusicAPI:
             return None
 
     async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
-        instances = [
+        self_hosted = os.environ.get("PIPED_API_DOMAIN", "")
+        instances = (
+            [f"https://{self_hosted}"] if self_hosted else []
+        ) + [
             "https://api.piped.private.coffee",
+            "https://pipedapi.kavin.rocks",
+            "https://pipedapi.tokhmi.xyz",
         ]
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             for instance in instances:
