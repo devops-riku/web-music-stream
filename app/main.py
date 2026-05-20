@@ -25,7 +25,8 @@ from app.schemas import (
     MessageResponse,
     ConversationSummary,
 )
-from app.ytmusic import ytmusic_api, _enrich_with_itunes
+from app.soundcloud import soundcloud_api
+from app.ytmusic import _enrich_with_itunes
 from app.auth import (
     hash_password,
     verify_password,
@@ -200,7 +201,7 @@ async def get_home_tracks(
     current_user: User = Depends(get_current_user_or_guest)
 ):
     try:
-        tracks = ytmusic_api.get_trending(limit)
+        tracks = await soundcloud_api.get_trending(limit)
         tracks = await _enrich_with_itunes(tracks)
 
         track_ids = [t["track_id"] for t in tracks]
@@ -228,7 +229,7 @@ async def search_tracks(
     current_user: User = Depends(get_current_user_or_guest)
 ):
     try:
-        tracks = ytmusic_api.search(q, offset + limit)
+        tracks = await soundcloud_api.search(q, offset + limit)
         tracks = tracks[offset:offset + limit]
         tracks = await _enrich_with_itunes(tracks)
 
@@ -316,14 +317,14 @@ async def resolve_stream(id: str = Query(..., description="YouTube Video ID")):
     Resolve a direct audio URL via Piped / Invidious (server-to-server, no CORS).
     Returns the URL for the frontend to play directly.
     """
-    url = await ytmusic_api.get_stream_url(id)
+    url = await soundcloud_api.get_stream_url(id)
     if not url:
         raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
     return {"url": url}
 
 @app.get("/api/player/stream")
 async def proxy_stream(request: Request, id: str = Query(..., description="YouTube Video ID")):
-    url = await ytmusic_api.get_stream_url(id)
+    url = await soundcloud_api.get_stream_url(id)
     if not url:
         raise HTTPException(status_code=404, detail="Could not extract stream URL.")
 
