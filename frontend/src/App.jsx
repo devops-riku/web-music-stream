@@ -59,6 +59,12 @@ import './App.css';
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8000';
 const BACKEND_WS = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8000';
+// Backend stores naive UTC datetimes — append Z so JS parses as UTC, then convert to PH time
+const fmtTime = (ts) => {
+  const d = new Date(ts.endsWith('Z') || ts.includes('+') ? ts : ts + 'Z');
+  return d.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' });
+};
+
 const ALBUM_ART_FALLBACK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%231a1a2e' rx='8'/%3E%3Ctext x='100' y='125' font-size='90' text-anchor='middle' fill='%237c3aed'%3E%E2%99%AA%3C/text%3E%3C/svg%3E";
 
 
@@ -1719,7 +1725,7 @@ function App() {
                           }}>
                             <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
                             <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-                              {new Date(msg.created_at).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' })}
+                              {fmtTime(msg.created_at)}
                             </Text>
                           </div>
                         </div>
