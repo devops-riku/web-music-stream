@@ -37,12 +37,12 @@ services:
     container_name: piped-db
     environment:
       POSTGRES_DB: piped
-      POSTGRES_USER: piped
+      POSTGRES_USER: piped-riku
       POSTGRES_PASSWORD: ${PIPED_DB_PASSWORD}
     volumes:
       - piped_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U piped -d piped"]
+      test: ["CMD-SHELL", "pg_isready -U piped-riku -d piped"]
       interval: 5s
       timeout: 5s
       retries: 10
