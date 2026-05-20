@@ -310,6 +310,17 @@ async def get_liked_tracks(
 
 # ─── Streaming ───────────────────────────────────────────────────────────────
 
+@app.get("/api/player/resolve")
+async def resolve_stream(id: str = Query(..., description="YouTube Video ID")):
+    """
+    Resolve a direct audio URL via Piped / Invidious (server-to-server, no CORS).
+    Returns the URL for the frontend to play directly.
+    """
+    url = await ytmusic_api.get_stream_url(id)
+    if not url:
+        raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
+    return {"url": url}
+
 @app.get("/api/player/stream")
 async def proxy_stream(request: Request, id: str = Query(..., description="YouTube Video ID")):
     url = await ytmusic_api.get_stream_url(id)
@@ -340,6 +351,7 @@ async def proxy_stream(request: Request, id: str = Query(..., description="YouTu
             await client.aclose()
 
     return StreamingResponse(generate(), status_code=upstream.status_code, headers=resp_headers)
+
 
 # ─── Jam Rooms ───────────────────────────────────────────────────────────────
 

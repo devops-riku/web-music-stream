@@ -60,119 +60,6 @@ import './App.css';
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8000';
 const BACKEND_WS = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8000';
 
-// ─── Stream Instance Discovery ──────────────────────────────────────────────
-// Piped fallback instances (used if the dynamic fetch fails)
-const PIPED_FALLBACK_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://api.piped.private.coffee',
-  'https://pipedapi.r4fo.com',
-  'https://pipedapi.adminforge.de',
-  'https://pipedapi.in.projectsegfau.lt',
-  'https://pipedapi.us.projectsegfau.lt',
-  'https://api.piped.yt',
-  'https://pipedapi.darkness.services',
-  'https://piped-api.hostux.net',
-  'https://pipedapi.drgns.space',
-  'https://pipedapi.smnz.de',
-  'https://piapi.ggtyler.dev',
-  'https://pipedapi.reallyaweso.me',
-  'https://pipedapi.leptons.xyz',
-];
-
-// Invidious instances as secondary fallback
-const INVIDIOUS_INSTANCES = [
-  'https://invidious.fdn.fr',
-  'https://yewtu.be',
-  'https://invidious.nerdvpn.de',
-  'https://invidious.perennialte.ch',
-  'https://inv.nadeko.net',
-  'https://invidious.materialio.us',
-  'https://invidious.privacyredirect.com',
-  'https://invidious.protokolla.fi',
-  'https://iv.datura.network',
-  'https://invidious.lunar.icu',
-];
-
-// Global stream instance cache (persists across re-renders)
-let _cachedPipedInstances = null;
-let _lastWorkingPiped = null;
-let _lastWorkingInvidious = null;
-
-async function fetchPipedInstances() {
-  if (_cachedPipedInstances) return _cachedPipedInstances;
-  try {
-    const res = await fetch('https://piped-instances.kavin.rocks/', { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      const list = await res.json();
-      // Filter to only API instances that are up, prefer those with lower latency
-      const apis = list
-        .filter(i => i.api_url && i.up !== false)
-        .sort((a, b) => (a.latency || 9999) - (b.latency || 9999))
-        .map(i => i.api_url.replace(/\/$/, ''));
-      if (apis.length > 0) {
-        _cachedPipedInstances = apis;
-        return apis;
-      }
-    }
-  } catch (_) { /* ignore */ }
-  _cachedPipedInstances = PIPED_FALLBACK_INSTANCES;
-  return PIPED_FALLBACK_INSTANCES;
-}
-
-async function tryPipedStream(videoId) {
-  const instances = await fetchPipedInstances();
-  // If we have a known working instance, try it first
-  const ordered = _lastWorkingPiped
-    ? [_lastWorkingPiped, ...instances.filter(i => i !== _lastWorkingPiped)]
-    : instances;
-
-  for (const piped of ordered) {
-    try {
-      const res = await fetch(`${piped}/streams/${encodeURIComponent(videoId)}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      // Find the best audio stream (prefer higher bitrate)
-      const audioStreams = (data.audioStreams || []).filter(s => s.url);
-      if (audioStreams.length === 0) continue;
-      // Sort by bitrate descending, pick highest quality
-      audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-      const best = audioStreams[0];
-      _lastWorkingPiped = piped;
-      console.log(`[Stream] Piped OK via ${piped}`);
-      return best.url;
-    } catch (_) { continue; }
-  }
-  return null;
-}
-
-async function tryInvidiousStream(videoId) {
-  const ordered = _lastWorkingInvidious
-    ? [_lastWorkingInvidious, ...INVIDIOUS_INSTANCES.filter(i => i !== _lastWorkingInvidious)]
-    : INVIDIOUS_INSTANCES;
-
-  for (const inv of ordered) {
-    try {
-      const res = await fetch(`${inv}/api/v1/videos/${encodeURIComponent(videoId)}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      // Invidious returns adaptiveFormats — pick audio-only with highest bitrate
-      const audioFormats = (data.adaptiveFormats || []).filter(
-        f => f.type?.startsWith('audio/') && f.url
-      );
-      if (audioFormats.length === 0) continue;
-      audioFormats.sort((a, b) => (b.bitrate ? parseInt(b.bitrate) : 0) - (a.bitrate ? parseInt(a.bitrate) : 0));
-      _lastWorkingInvidious = inv;
-      console.log(`[Stream] Invidious OK via ${inv}`);
-      return audioFormats[0].url;
-    } catch (_) { continue; }
-  }
-  return null;
-}
-
 
 
 function App() {
@@ -759,27 +646,25 @@ function App() {
     }
 
     try {
-      // 1) Try Piped instances (browser → Piped → YouTube, bypasses droplet)
-      const pipedUrl = await tryPipedStream(track.track_id);
-      if (pipedUrl) {
-        playLocalPreview({ ...track, preview_url: pipedUrl }, null, startPositionMs);
-        return;
+      // 1) Ask backend to resolve a direct audio URL (backend calls Piped/Invidious server-to-server, no CORS)
+      const resolveRes = await fetch(
+        `${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`
+      );
+      if (resolveRes.ok) {
+        const { url } = await resolveRes.json();
+        if (url) {
+          console.log('[Stream] Resolved via backend');
+          playLocalPreview({ ...track, preview_url: url }, null, startPositionMs);
+          return;
+        }
       }
-
-      // 2) Try Invidious instances (browser → Invidious → YouTube)
-      const invUrl = await tryInvidiousStream(track.track_id);
-      if (invUrl) {
-        playLocalPreview({ ...track, preview_url: invUrl }, null, startPositionMs);
-        return;
-      }
-
-      // 3) Fall back to backend proxy (droplet → YouTube via yt-dlp)
-      console.log('[Stream] All browser-side instances failed, falling back to backend proxy');
-      const backendUrl = `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track.track_id)}`;
-      playLocalPreview({ ...track, preview_url: backendUrl }, null, startPositionMs);
     } catch (err) {
-      playLocalPreview(track, 'Error contacting stream API.', startPositionMs);
+      console.warn('[Stream] Resolve failed, trying full proxy', err);
     }
+
+    // 2) Fall back to full backend proxy stream (proxies the entire audio through the backend)
+    const backendUrl = `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track.track_id)}`;
+    playLocalPreview({ ...track, preview_url: backendUrl }, null, startPositionMs);
   };
 
 
