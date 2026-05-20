@@ -125,7 +125,7 @@ class YouTubeMusicAPI:
             'extract_flat': False,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web', 'android', 'tv_embedded'],
+                    'player_client': ['android_music', 'android', 'mweb'],
                 }
             },
         }
