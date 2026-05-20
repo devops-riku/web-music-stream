@@ -59,6 +59,7 @@ import './App.css';
 
 const BACKEND_API = import.meta.env.VITE_BACKEND_API || 'http://localhost:8000';
 const BACKEND_WS = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8000';
+const ALBUM_ART_FALLBACK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%231a1a2e' rx='8'/%3E%3Ctext x='100' y='125' font-size='90' text-anchor='middle' fill='%237c3aed'%3E%E2%99%AA%3C/text%3E%3C/svg%3E";
 
 
 
@@ -608,8 +609,28 @@ function App() {
     }
   };
 
-  const playTrackFromQueue = (queue, track) => {
+  const playTrackFromQueue = async (queue, track) => {
     setActiveQueue(queue);
+
+    // Resolve stream URL first so we can share it with jam guests.
+    // SoundCloud CDN URLs are not IP-locked, so all guests can use the same URL.
+    if (!track.track_id.startsWith('mock_') && !track.track_id.startsWith('trend_') && !track.track_id.startsWith('hero_')) {
+      try {
+        const res = await fetch(`${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`);
+        if (res.ok) {
+          const { url } = await res.json();
+          if (url) {
+            const resolved = { ...track, preview_url: url };
+            playLocalPreview(resolved, null, 0);
+            setCurrentTrack(resolved);
+            sendJamEvent('track_change', { track: resolved });
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // Fallback: no pre-resolution (guests will resolve themselves)
     playTrack(track);
     sendJamEvent('track_change', { track });
   };
@@ -626,7 +647,11 @@ function App() {
     } else {
       next = activeQueue[(idx + direction + activeQueue.length) % activeQueue.length];
     }
-    playTrack(next);
+    if (jamRoom && isJamHostRef.current) {
+      playTrackFromQueue(activeQueue, next);
+    } else {
+      playTrack(next);
+    }
   };
 
   // 6. Play Track
@@ -641,6 +666,12 @@ function App() {
     }
 
     if (track.track_id.startsWith('mock_') || track.track_id.startsWith('trend_') || track.track_id.startsWith('hero_')) {
+      playLocalPreview(track, null, startPositionMs);
+      return;
+    }
+
+    // If preview_url already resolved (e.g. from jam host broadcast), play directly
+    if (track.preview_url) {
       playLocalPreview(track, null, startPositionMs);
       return;
     }
@@ -1288,7 +1319,7 @@ function App() {
                   <Grid.Col span={{ base: 6, sm: 3 }} key={track.track_id}>
                     <Card className="music-card" radius="lg" p="md" onClick={() => playTrackFromQueue(homeTracks, track)} style={{ border: currentTrack?.track_id === track.track_id ? '1px solid #a78bfa' : undefined }}>
                       <Card.Section p="xs">
-                        <Image src={track.album_art} radius="md" style={{ aspectRatio: '1/1', objectFit: 'cover' }} />
+                        <Image src={track.album_art || ALBUM_ART_FALLBACK} radius="md" style={{ aspectRatio: '1/1', objectFit: 'cover' }} />
                       </Card.Section>
                       <Stack gap={2} mt="xs">
                         <Text fw={700} size="sm" truncate="end">{track.name}</Text>
@@ -1323,7 +1354,7 @@ function App() {
                       </Grid.Col>
                       <Grid.Col span={{ base: 10, xs: 7 }}>
                         <Group gap="md" wrap="nowrap">
-                          <Image src={track.album_art} w={40} h={40} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
+                          <Image src={track.album_art || ALBUM_ART_FALLBACK} w={40} h={40} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
                           <Stack gap={1} style={{ minWidth: 0 }}>
                             <Text fw={700} size="sm" truncate="end" color={currentTrack?.track_id === track.track_id ? '#a78bfa' : '#fff'}>
                               {track.name}
@@ -1403,7 +1434,7 @@ function App() {
                           <Grid.Col span={{ base: 8, sm: 6 }}>
                             <Group gap="sm" wrap="nowrap">
                               <Image
-                                src={track.album_art || null}
+                                src={track.album_art || ALBUM_ART_FALLBACK}
                                 w={40} h={40} radius="sm"
                                 style={{ objectFit: 'cover', flexShrink: 0, background: '#27272a' }}
                               />
@@ -1520,13 +1551,7 @@ function App() {
 
                       <Grid.Col span={{ base: 9, sm: 6 }}>
                         <Group gap="sm" wrap="nowrap">
-                          {track.album_art ? (
-                            <Image src={track.album_art} w={40} h={40} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
-                          ) : (
-                            <div style={{ width: 40, height: 40, borderRadius: 8, background: 'linear-gradient(135deg, #6d28d9, #a78bfa)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                              <IconMusic size={16} color="#fff" />
-                            </div>
-                          )}
+                          <Image src={track.album_art || ALBUM_ART_FALLBACK} w={40} h={40} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
                           <Stack gap={1} style={{ minWidth: 0 }}>
                             <Text fw={700} size="sm" truncate="end" color={currentTrack?.track_id === track.track_id ? '#a78bfa' : '#fff'}>
                               {track.name}
@@ -1818,13 +1843,7 @@ function App() {
         <Box hiddenFrom="sm" px="sm" py={8} style={{ display: 'flex', flexDirection: 'column', gap: 6, height: '100%', justifyContent: 'center' }}>
           {/* Row 1: Art + Title + Controls */}
           <Group gap="sm" wrap="nowrap" align="center">
-            {currentTrack?.album_art ? (
-              <Image src={currentTrack.album_art} w={36} h={36} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
-            ) : (
-              <div style={{ width: 36, height: 36, borderRadius: 8, background: 'linear-gradient(135deg, #6d28d9, #a78bfa)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <IconMusic size={14} color="#fff" />
-              </div>
-            )}
+            <Image src={currentTrack?.album_art || ALBUM_ART_FALLBACK} w={36} h={36} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
             <Stack gap={0} style={{ flex: 1, minWidth: 0 }}>
               <Text fw={700} size="xs" truncate="end" color="#fff">{currentTrack?.name || 'No Track'}</Text>
               <Text size="10px" color="dimmed" truncate="end">{currentTrack?.artist || ''}</Text>
@@ -1863,13 +1882,7 @@ function App() {
             <Grid.Col span={4} style={{ display: 'flex', alignItems: 'center' }}>
               {currentTrack ? (
                 <Group gap="md" wrap="nowrap" style={{ minWidth: 0, width: '100%' }}>
-                  {currentTrack.album_art ? (
-                    <Image src={currentTrack.album_art} w={44} h={44} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
-                  ) : (
-                    <div style={{ width: 44, height: 44, borderRadius: 8, background: 'linear-gradient(135deg, #6d28d9, #a78bfa)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <IconMusic size={18} color="#fff" />
-                    </div>
-                  )}
+                  <Image src={currentTrack.album_art || ALBUM_ART_FALLBACK} w={44} h={44} radius="sm" style={{ flexShrink: 0, objectFit: 'cover' }} />
                   <Stack gap={1} style={{ minWidth: 0, flex: 1 }}>
                     <Text fw={700} size="sm" truncate="end" color="#fff">{currentTrack?.name}</Text>
                     <Text size="xs" color="dimmed" truncate="end">{currentTrack?.artist}</Text>
