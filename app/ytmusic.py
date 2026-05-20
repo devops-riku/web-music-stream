@@ -117,48 +117,60 @@ class YouTubeMusicAPI:
         return self.search("top hits 2024", limit=limit)
 
     def get_stream_url(self, video_id: str) -> Optional[str]:
-        import os, shutil
-        video_url = f"https://music.youtube.com/watch?v={video_id}"
+        import asyncio
 
-        cookies_src = '/app/cookies.txt'
-        cookies_path = '/tmp/yt_cookies.txt'
-        if os.path.exists(cookies_src) and not os.path.exists(cookies_path):
-            shutil.copy2(cookies_src, cookies_path)
-        has_cookies = os.path.exists(cookies_path)
+        # Try Invidious instances first (bypasses server IP flagging)
+        url = asyncio.run(self._get_stream_url_invidious(video_id))
+        if url:
+            return url
 
-        def _extract(opts):
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(video_url, download=False)
-                    url = info.get('url')
-                    if not url and info.get('formats'):
-                        for f in reversed(info['formats']):
-                            if f.get('url') and f.get('acodec') != 'none':
-                                return f['url']
-                    return url
-            except Exception as e:
-                print(f"yt-dlp attempt failed for {video_id}: {e}")
-                return None
-
-        # Attempt 1: android without cookies (android skips when cookies present)
-        result = _extract({
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'no_warnings': True,
-            'extractor_args': {'youtube': {'player_client': ['android_music', 'android']}},
-        })
-        if result:
-            return result
-
-        # Attempt 2: web with cookies
-        if has_cookies:
-            result = _extract({
+        # Fallback: yt-dlp android client without cookies
+        try:
+            with yt_dlp.YoutubeDL({
                 'format': 'bestaudio/best',
                 'quiet': True,
                 'no_warnings': True,
-                'cookiefile': cookies_path,
-                'extractor_args': {'youtube': {'player_client': ['web_music', 'web']}},
-            })
-        return result
+                'extractor_args': {'youtube': {'player_client': ['android_music', 'android']}},
+            }) as ydl:
+                info = ydl.extract_info(
+                    f"https://music.youtube.com/watch?v={video_id}", download=False
+                )
+                stream = info.get('url')
+                if not stream and info.get('formats'):
+                    for f in reversed(info['formats']):
+                        if f.get('url') and f.get('acodec') != 'none':
+                            return f['url']
+                return stream
+        except Exception as e:
+            print(f"yt-dlp fallback failed for {video_id}: {e}")
+            return None
+
+    async def _get_stream_url_invidious(self, video_id: str) -> Optional[str]:
+        instances = [
+            "https://invidious.privacyredirect.com",
+            "https://inv.nadeko.net",
+            "https://invidious.nerdvpn.de",
+        ]
+        async with httpx.AsyncClient(timeout=10) as client:
+            for instance in instances:
+                try:
+                    r = await client.get(f"{instance}/api/v1/videos/{video_id}")
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                    audio_formats = [
+                        f for f in data.get('adaptiveFormats', [])
+                        if f.get('type', '').startswith('audio/')
+                    ]
+                    if audio_formats:
+                        audio_formats.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+                        url = audio_formats[0].get('url')
+                        if url:
+                            print(f"Invidious stream found via {instance}")
+                            return url
+                except Exception as e:
+                    print(f"Invidious {instance} failed: {e}")
+                    continue
+        return None
 
 ytmusic_api = YouTubeMusicAPI()
