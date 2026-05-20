@@ -644,16 +644,25 @@ function App() {
       return;
     }
 
+    const pipedInstances = [
+      'https://api.piped.private.coffee',
+      'https://pipedapi.kavin.rocks',
+      'https://pipedapi.tokhmi.xyz',
+      'https://pipedapi.moomoo.me',
+      'https://piped-api.garudalinux.org',
+    ];
     try {
-      const piped = 'https://api.piped.private.coffee';
-      const res = await fetch(`${piped}/streams/${encodeURIComponent(track.track_id)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const audio = (data.audioStreams || []).find(s => s.url);
-        if (audio?.url) {
-          playLocalPreview({ ...track, preview_url: audio.url }, null, startPositionMs);
-          return;
-        }
+      for (const piped of pipedInstances) {
+        try {
+          const res = await fetch(`${piped}/streams/${encodeURIComponent(track.track_id)}`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          const audio = (data.audioStreams || []).find(s => s.url);
+          if (audio?.url) {
+            playLocalPreview({ ...track, preview_url: audio.url }, null, startPositionMs);
+            return;
+          }
+        } catch (_) { continue; }
       }
       playLocalPreview(track, 'Could not resolve stream.', startPositionMs);
     } catch (err) {
