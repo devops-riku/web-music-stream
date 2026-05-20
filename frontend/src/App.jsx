@@ -1719,7 +1719,7 @@ function App() {
                           }}>
                             <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
                             <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-                              {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {new Date(msg.created_at).toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' })}
                             </Text>
                           </div>
                         </div>
