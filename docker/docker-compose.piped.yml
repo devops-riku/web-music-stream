@@ -10,6 +10,7 @@ services:
         condition: service_healthy
     volumes:
       - ./piped.config.properties:/app/config.properties:ro
+      - ../data/cookies.txt:/app/cookies.txt:ro
     labels:
       - traefik.enable=true
       - traefik.http.routers.piped-backend.rule=Host(`${PIPED_API_DOMAIN}`)
