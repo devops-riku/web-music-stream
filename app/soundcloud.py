@@ -56,7 +56,7 @@ class SoundCloudAPI:
 
     async def get_trending(self, limit: int = 20) -> List[Dict[str, Any]]:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _extract_flat, "trending music 2025", limit)
+        return await loop.run_in_executor(None, _extract_flat, "trending music PH", limit)
 
     async def get_stream_url(self, track_url: str) -> Optional[str]:
         loop = asyncio.get_event_loop()
