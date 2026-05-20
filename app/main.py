@@ -249,9 +249,8 @@ async def search_tracks(
 
 # ─── Like / Unlike ───────────────────────────────────────────────────────────
 
-@app.post("/api/tracks/{track_id}/like", response_model=LikedTrackResponse)
+@app.post("/api/tracks/like", response_model=LikedTrackResponse)
 async def like_track(
-    track_id: str,
     track_info: LikedTrackCreate,
     current_user: User = Depends(get_current_user_or_guest),
     db: Session = Depends(get_db)
@@ -259,7 +258,7 @@ async def like_track(
     existing_like = db.scalar(
         select(LikedTrack).where(
             LikedTrack.user_id == current_user.id,
-            LikedTrack.track_id == track_id
+            LikedTrack.track_id == track_info.track_id
         )
     )
     if existing_like:
@@ -267,7 +266,7 @@ async def like_track(
 
     new_like = LikedTrack(
         user_id=current_user.id,
-        track_id=track_id,
+        track_id=track_info.track_id,
         name=track_info.name,
         artist=track_info.artist,
         album=track_info.album,
@@ -281,9 +280,9 @@ async def like_track(
     return new_like
 
 
-@app.delete("/api/tracks/{track_id}/like")
+@app.delete("/api/tracks/like")
 async def unlike_track(
-    track_id: str,
+    track_id: str = Query(..., description="Track ID to unlike"),
     current_user: User = Depends(get_current_user_or_guest),
     db: Session = Depends(get_db)
 ):

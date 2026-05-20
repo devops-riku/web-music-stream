@@ -570,7 +570,7 @@ function App() {
 
     try {
       if (isCurrentlyLiked) {
-        const res = await fetch(`${BACKEND_API}/api/tracks/${track.track_id}/like`, {
+        const res = await fetch(`${BACKEND_API}/api/tracks/like?track_id=${encodeURIComponent(track.track_id)}`, {
           method: 'DELETE',
           headers: authHeaders
         });
@@ -582,7 +582,7 @@ function App() {
           }
         }
       } else {
-        const res = await fetch(`${BACKEND_API}/api/tracks/${track.track_id}/like`, {
+        const res = await fetch(`${BACKEND_API}/api/tracks/like`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({
