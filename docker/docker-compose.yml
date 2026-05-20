@@ -1,0 +1,68 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    image: web-music-stream-backend:latest
+    container_name: web-music-stream-backend
+    env_file: .env
+    depends_on:
+      db_rikupy:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.backend.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`))
+      - traefik.http.routers.backend.entrypoints=websecure
+      - traefik.http.routers.backend.tls.certresolver=le
+      - traefik.http.routers.backend.priority=10
+      - traefik.http.services.backend.loadbalancer.server.port=8000
+    networks:
+      - traefik-proxy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_BACKEND_API: https://${DOMAIN}
+        VITE_BACKEND_WS: wss://${DOMAIN}
+    image: web-music-stream-frontend:latest
+    container_name: web-music-stream-frontend
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls.certresolver=le
+      - traefik.http.routers.frontend.priority=1
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+    networks:
+      - traefik-proxy
+
+  db_rikupy:
+    image: postgres:16-alpine
+    container_name: web-music-stream-db
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata_rikupy:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - traefik-proxy
+
+networks:
+  traefik-proxy:
+    external: true
+    name: asseqr-system_app-network
+
+volumes:
+  pgdata_rikupy:
