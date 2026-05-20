@@ -30,7 +30,6 @@ services:
       args:
         VITE_BACKEND_API: https://${DOMAIN}
         VITE_BACKEND_WS: wss://${DOMAIN}
-        VITE_PIPED_API: ${PIPED_API_DOMAIN}
     container_name: web-music-stream-frontend
     restart: unless-stopped
     labels:

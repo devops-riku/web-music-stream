@@ -644,9 +644,7 @@ function App() {
       return;
     }
 
-    const selfHosted = import.meta.env.VITE_PIPED_API ? `https://${import.meta.env.VITE_PIPED_API}` : null;
     const pipedInstances = [
-      ...(selfHosted ? [selfHosted] : []),
       'https://api.piped.private.coffee',
       'https://pipedapi.kavin.rocks',
       'https://pipedapi.tokhmi.xyz',
