@@ -57,6 +57,16 @@ class Message(Base):
     recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    reply_to_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
 
     sender: Mapped["User"] = relationship("User", foreign_keys=[sender_id])
     recipient: Mapped["User"] = relationship("User", foreign_keys=[recipient_id])
+
+
+class ConversationRead(Base):
+    """Tracks when a user last read messages from a specific partner."""
+    __tablename__ = "conversation_reads"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    partner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    last_read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -128,8 +128,10 @@ function App() {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState({});   // { [username]: bool }
-  const [readBy, setReadBy] = useState({});             // { [theirUsername]: true } — they read my messages
-  const [unreadCounts, setUnreadCounts] = useState({}); // { [username]: number }
+  const [readBy, setReadBy] = useState({});
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const [replyingTo, setReplyingTo] = useState(null);   // { id, content, sender_username }
+  const [hoveredMsgId, setHoveredMsgId] = useState(null);
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -547,6 +549,7 @@ function App() {
   }, [accessToken]);
 
   const openConversation = async (username) => {
+    setReplyingTo(null);
     setLoadingMessages(true);
     try {
       const res = await fetch(`${BACKEND_API}/api/messages/${username}`, {
@@ -565,6 +568,15 @@ function App() {
           wsRef.current.send(JSON.stringify({ type: 'mark_read', sender_username: username }));
         }
         setUnreadCounts(prev => ({ ...prev, [username]: 0 }));
+        // Restore read receipt state from server
+        fetch(`${BACKEND_API}/api/messages/${username}/read-state`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        })
+          .then(r => r.json())
+          .then(d => {
+            if (d.partner_has_read) setReadBy(prev => ({ ...prev, [username]: true }));
+          })
+          .catch(() => {});
         // Fetch initial online status
         fetch(`${BACKEND_API}/api/users/${username}/online`)
           .then(r => r.json())
@@ -582,16 +594,19 @@ function App() {
     if (!newMessage.trim() || !activeConversation || sendingMessage) return;
     setSendingMessage(true);
     const content = newMessage.trim();
+    const replyId = replyingTo?.id ?? null;
     setNewMessage('');
+    setReplyingTo(null);
     try {
       const res = await fetch(`${BACKEND_API}/api/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({ recipient_username: activeConversation, content })
+        body: JSON.stringify({ recipient_username: activeConversation, content, reply_to_id: replyId })
       });
       if (!res.ok) {
         const err = await res.json();
-        setNewMessage(content); // restore on failure
+        setNewMessage(content);
+        setReplyingTo(replyingTo);
         setPlaybackMessage({ type: 'error', text: err.detail || 'Failed to send message.' });
       }
       // WS echo from backend will append the message via onmessage handler
@@ -1811,8 +1826,8 @@ function App() {
                   )}
                 </Group>
 
-                {/* Scrollable messages — leaves 56px at bottom for input */}
-                <div style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 56, overflowY: 'auto', backgroundColor: '#0f0f13', border: '1px solid #1e1e24', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {/* Scrollable messages */}
+                <div style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: replyingTo ? 92 : 56, overflowY: 'auto', backgroundColor: '#0f0f13', border: '1px solid #1e1e24', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {loadingMessages ? (
                     <Group justify="center" py="xl"><Loader color="violet" type="dots" /></Group>
                   ) : messages.length === 0 ? (
@@ -1823,14 +1838,45 @@ function App() {
                         const isMine = msg.sender_username === userProfile?.auth_id;
                         const lastMineId = messages.filter(m => m.sender_username === userProfile?.auth_id).at(-1)?.id;
                         const isLast = msg.id === lastMineId;
+                        const isHovered = hoveredMsgId === msg.id;
                         return (
-                          <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+                          <div
+                            key={msg.id}
+                            style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: 4 }}
+                            onMouseEnter={() => setHoveredMsgId(msg.id)}
+                            onMouseLeave={() => setHoveredMsgId(null)}
+                          >
+                            {isMine && (
+                              <ActionIcon
+                                size="xs" variant="subtle" color="gray" radius="xl"
+                                style={{ opacity: isHovered ? 1 : 0, transition: 'opacity 0.15s', flexShrink: 0, marginBottom: 4 }}
+                                onClick={() => setReplyingTo({ id: msg.id, content: msg.content, sender_username: msg.sender_username })}
+                                title="Reply"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+                              </ActionIcon>
+                            )}
                             <div style={{
                               maxWidth: '70%',
                               backgroundColor: isMine ? '#6d28d9' : '#1e1e28',
                               borderRadius: isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
                               padding: '8px 14px',
                             }}>
+                              {msg.reply_to_content && (
+                                <div style={{
+                                  borderLeft: `3px solid ${isMine ? 'rgba(255,255,255,0.4)' : '#6d28d9'}`,
+                                  paddingLeft: 8,
+                                  marginBottom: 6,
+                                  opacity: 0.85,
+                                }}>
+                                  <Text size="10px" fw={600} style={{ color: isMine ? 'rgba(255,255,255,0.7)' : '#a78bfa' }}>
+                                    @{msg.reply_to_sender}
+                                  </Text>
+                                  <Text size="xs" style={{ color: isMine ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 200 }}>
+                                    {msg.reply_to_content}
+                                  </Text>
+                                </div>
+                              )}
                               <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 2 }}>
                                 <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)' }}>
@@ -1843,6 +1889,16 @@ function App() {
                                 )}
                               </div>
                             </div>
+                            {!isMine && (
+                              <ActionIcon
+                                size="xs" variant="subtle" color="gray" radius="xl"
+                                style={{ opacity: isHovered ? 1 : 0, transition: 'opacity 0.15s', flexShrink: 0, marginBottom: 4 }}
+                                onClick={() => setReplyingTo({ id: msg.id, content: msg.content, sender_username: msg.sender_username })}
+                                title="Reply"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+                              </ActionIcon>
+                            )}
                           </div>
                         );
                       })}
@@ -1865,7 +1921,18 @@ function App() {
                 </div>
 
                 {/* Input pinned at bottom */}
-                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {replyingTo && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, backgroundColor: '#18181b', border: '1px solid #27272a', borderRadius: 10, padding: '6px 12px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2.5" style={{ flexShrink: 0 }}><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text size="10px" fw={600} style={{ color: '#a78bfa' }}>@{replyingTo.sender_username}</Text>
+                      <Text size="xs" style={{ color: 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{replyingTo.content}</Text>
+                    </div>
+                    <ActionIcon size="xs" variant="subtle" color="gray" onClick={() => setReplyingTo(null)}>✕</ActionIcon>
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <TextInput
                     placeholder={wsConnected ? 'Type a message…' : 'Reconnecting…'}
                     value={newMessage}
@@ -1890,6 +1957,7 @@ function App() {
                   >
                     <IconSend size={16} />
                   </ActionIcon>
+                </div>
                 </div>
               </div>
             )}

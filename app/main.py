@@ -13,12 +13,23 @@ from datetime import datetime, timezone
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-# In-memory last-read tracker: {user_id: {partner_id: naive_utc_datetime}}
-_last_read: Dict[int, Dict[int, datetime]] = {}
+
+def _get_last_read(db: Session, user_id: int, partner_id: int):
+    cr = db.get(ConversationRead, (user_id, partner_id))
+    return cr.last_read_at if cr else None
+
+
+def _upsert_last_read(db: Session, user_id: int, partner_id: int) -> None:
+    cr = db.get(ConversationRead, (user_id, partner_id))
+    if cr:
+        cr.last_read_at = datetime.utcnow()
+    else:
+        db.add(ConversationRead(user_id=user_id, partner_id=partner_id, last_read_at=datetime.utcnow()))
+    db.commit()
 
 from app.config import settings
 from app.db import Base, engine, get_db
-from app.models import User, LikedTrack, Message
+from app.models import User, LikedTrack, Message, ConversationRead
 from app.schemas import (
     TrackResponse,
     LikedTrackCreate,
@@ -530,7 +541,25 @@ async def send_message(
     if recipient.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot message yourself.")
 
-    msg = Message(sender_id=current_user.id, recipient_id=recipient.id, content=body.content.strip())
+    reply_to_content = None
+    reply_to_sender = None
+    if body.reply_to_id:
+        parent = db.get(Message, body.reply_to_id)
+        if parent and (
+            (parent.sender_id == current_user.id and parent.recipient_id == recipient.id) or
+            (parent.sender_id == recipient.id and parent.recipient_id == current_user.id)
+        ):
+            reply_to_content = parent.content
+            reply_to_sender = parent.sender.auth_id
+        else:
+            body.reply_to_id = None
+
+    msg = Message(
+        sender_id=current_user.id,
+        recipient_id=recipient.id,
+        content=body.content.strip(),
+        reply_to_id=body.reply_to_id,
+    )
     db.add(msg)
     db.commit()
     db.refresh(msg)
@@ -544,13 +573,16 @@ async def send_message(
         "recipient_username": recipient.auth_id,
         "content": msg.content,
         "created_at": msg.created_at.isoformat(),
+        "reply_to_id": msg.reply_to_id,
+        "reply_to_content": reply_to_content,
+        "reply_to_sender": reply_to_sender,
     }
     # Push to both sender and recipient
     await manager.send_to_user(current_user.id, payload)
     await manager.send_to_user(recipient.id, payload)
 
     # Push updated unread count to recipient
-    last_read_ts = _last_read.get(recipient.id, {}).get(current_user.id)
+    last_read_ts = _get_last_read(db, recipient.id, current_user.id)
     unread_q = select(func.count(Message.id)).where(
         Message.sender_id == current_user.id,
         Message.recipient_id == recipient.id,
@@ -606,7 +638,7 @@ async def get_conversations(
         if not last_msg:
             continue
 
-        last_read_ts = _last_read.get(current_user.id, {}).get(pid)
+        last_read_ts = _get_last_read(db, current_user.id, pid)
         unread_q = select(func.count(Message.id)).where(
             Message.sender_id == pid,
             Message.recipient_id == current_user.id,
@@ -627,6 +659,29 @@ async def get_conversations(
 
     conversations.sort(key=lambda c: c.last_message_at, reverse=True)
     return conversations
+
+
+@app.get("/api/messages/{username}/read-state")
+async def get_read_state(
+    username: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user:
+        raise HTTPException(status_code=401)
+    other = db.scalar(select(User).where(User.auth_id == username.lower()))
+    if not other:
+        raise HTTPException(status_code=404)
+
+    last_mine = db.scalar(
+        select(Message).where(
+            Message.sender_id == current_user.id,
+            Message.recipient_id == other.id,
+        ).order_by(Message.created_at.desc()).limit(1)
+    )
+    partner_read_at = _get_last_read(db, other.id, current_user.id)
+    partner_has_read = bool(last_mine and partner_read_at and partner_read_at >= last_mine.created_at)
+    return {"partner_has_read": partner_has_read}
 
 
 @app.get("/api/messages/{username}", response_model=List[MessageResponse])
@@ -651,6 +706,13 @@ async def get_conversation(
         ).order_by(Message.created_at.asc())
     ).all()
 
+    # Batch-load parent messages for replies
+    parent_ids = {m.reply_to_id for m in msgs if m.reply_to_id}
+    parents: dict[int, Message] = {}
+    if parent_ids:
+        for pm in db.scalars(select(Message).where(Message.id.in_(parent_ids))).all():
+            parents[pm.id] = pm
+
     return [
         MessageResponse(
             id=m.id,
@@ -660,6 +722,9 @@ async def get_conversation(
             recipient_username=m.recipient.auth_id,
             content=m.content,
             created_at=m.created_at,
+            reply_to_id=m.reply_to_id,
+            reply_to_content=parents[m.reply_to_id].content if m.reply_to_id and m.reply_to_id in parents else None,
+            reply_to_sender=parents[m.reply_to_id].sender.auth_id if m.reply_to_id and m.reply_to_id in parents else None,
         )
         for m in msgs
     ]
@@ -745,11 +810,11 @@ async def websocket_messages(ws: WebSocket, token: str):
                 db2 = SessionLocal()
                 try:
                     sender = db2.scalar(select(User).where(User.auth_id == sender_username))
+                    if sender:
+                        _upsert_last_read(db2, user.id, sender.id)
                 finally:
                     db2.close()
                 if sender:
-                    # Record when this user last read messages from sender
-                    _last_read.setdefault(user.id, {})[sender.id] = datetime.utcnow()
                     # Tell sender their messages were read
                     await manager.send_to_user(sender.id, {
                         "type": "messages_read",

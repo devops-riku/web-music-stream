@@ -59,6 +59,7 @@ class LikedTrackResponse(BaseModel):
 class MessageCreate(BaseModel):
     recipient_username: str
     content: str
+    reply_to_id: Optional[int] = None
 
 class MessageResponse(BaseModel):
     id: int
@@ -68,6 +69,9 @@ class MessageResponse(BaseModel):
     recipient_username: str
     content: str
     created_at: datetime
+    reply_to_id: Optional[int] = None
+    reply_to_content: Optional[str] = None
+    reply_to_sender: Optional[str] = None
 
     class Config:
         from_attributes = True
