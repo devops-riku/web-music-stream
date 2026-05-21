@@ -498,6 +498,8 @@ function App() {
             setRemoteTyping(false);
             fetchConversations();
             setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+            // If they replied, they clearly saw our last message
+            setReadBy(prev => ({ ...prev, [msg.sender_username]: true }));
           } else if (msg.type === 'typing') {
             setRemoteTyping(true);
             clearTimeout(typingTimeoutRef.current);
@@ -1795,9 +1797,12 @@ function App() {
                     <Group justify="center" py="xl"><Loader color="violet" type="dots" /></Group>
                   ) : messages.length === 0 ? (
                     <Text size="sm" color="dimmed" ta="center" mt="xl">No messages yet. Say hello!</Text>
-                  ) : (
-                    messages.map(msg => {
+                  ) : (() => {
+                    const myMsgs = messages.filter(m => m.sender_username === userProfile?.auth_id);
+                    const lastMineId = myMsgs.length ? myMsgs[myMsgs.length - 1].id : null;
+                    return messages.map(msg => {
                       const isMine = msg.sender_username === userProfile?.auth_id;
+                      const isLast = msg.id === lastMineId;
                       return (
                         <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
                           <div style={{
@@ -1811,7 +1816,7 @@ function App() {
                               <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)' }}>
                                 {fmtTime(msg.created_at)}
                               </Text>
-                              {isMine && (
+                              {isMine && isLast && (
                                 <Text size="10px" style={{ color: readBy[activeConversation] ? '#4ade80' : 'rgba(255,255,255,0.5)', lineHeight: 1 }}>
                                   {readBy[activeConversation] ? '✓✓' : '✓'}
                                 </Text>
@@ -1820,7 +1825,8 @@ function App() {
                           </div>
                         </div>
                       );
-                    })
+                    });
+                  })()
                   )}
                   {remoteTyping && (
                     <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
