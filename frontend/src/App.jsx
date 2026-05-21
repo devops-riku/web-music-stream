@@ -1817,33 +1817,36 @@ function App() {
                     <Group justify="center" py="xl"><Loader color="violet" type="dots" /></Group>
                   ) : messages.length === 0 ? (
                     <Text size="sm" color="dimmed" ta="center" mt="xl">No messages yet. Say hello!</Text>
-                  ) : messages.map(msg => {
-                      const isMine = msg.sender_username === userProfile?.auth_id;
-                      const lastMineId = messages.filter(m => m.sender_username === userProfile?.auth_id).at(-1)?.id;
-                      const isLast = msg.id === lastMineId;
-                      return (
-                        <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
-                          <div style={{
-                            maxWidth: '70%',
-                            backgroundColor: isMine ? '#6d28d9' : '#1e1e28',
-                            borderRadius: isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                            padding: '8px 14px',
-                          }}>
-                            <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 2 }}>
-                              <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                                {fmtTime(msg.created_at)}
-                              </Text>
-                              {isMine && isLast && (
-                                <Text size="10px" style={{ color: readBy[activeConversation] ? '#4ade80' : 'rgba(255,255,255,0.5)', lineHeight: 1 }}>
-                                  {readBy[activeConversation] ? '✓✓' : '✓'}
+                  ) : (
+                    <>
+                      {messages.map(msg => {
+                        const isMine = msg.sender_username === userProfile?.auth_id;
+                        const lastMineId = messages.filter(m => m.sender_username === userProfile?.auth_id).at(-1)?.id;
+                        const isLast = msg.id === lastMineId;
+                        return (
+                          <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+                            <div style={{
+                              maxWidth: '70%',
+                              backgroundColor: isMine ? '#6d28d9' : '#1e1e28',
+                              borderRadius: isMine ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                              padding: '8px 14px',
+                            }}>
+                              <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 2 }}>
+                                <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                                  {fmtTime(msg.created_at)}
                                 </Text>
-                              )}
+                                {isMine && isLast && (
+                                  <Text size="10px" style={{ color: readBy[activeConversation] ? '#4ade80' : 'rgba(255,255,255,0.5)', lineHeight: 1 }}>
+                                    {readBy[activeConversation] ? '✓✓' : '✓'}
+                                  </Text>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      );
-                    })
+                        );
+                      })}
+                    </>
                   )}
                   {remoteTyping && (
                     <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
