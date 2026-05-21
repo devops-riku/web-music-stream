@@ -67,7 +67,22 @@ const fmtTime = (ts) => {
 
 const ALBUM_ART_FALLBACK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%231a1a2e' rx='8'/%3E%3Ctext x='100' y='125' font-size='90' text-anchor='middle' fill='%237c3aed'%3E%E2%99%AA%3C/text%3E%3C/svg%3E";
 
-
+function TotalUnreadBadge({ counts }) {
+  const total = Object.values(counts).reduce((s, n) => s + n, 0);
+  if (!total) return null;
+  return (
+    <div style={{
+      minWidth: 18, height: 18, borderRadius: 9,
+      backgroundColor: '#7c3aed',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '0 5px',
+    }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', lineHeight: 1 }}>
+        {total > 99 ? '99+' : total}
+      </span>
+    </div>
+  );
+}
 
 function App() {
   // Mobile / Desktop navigation controllers
@@ -1179,9 +1194,10 @@ function App() {
                 }
               }}
             >
-              <Group gap="md">
+              <Group gap="md" style={{ flex: 1 }}>
                 <IconMessage size={18} />
-                <span>Messages</span>
+                <span style={{ flex: 1 }}>Messages</span>
+                <TotalUnreadBadge counts={unreadCounts} />
               </Group>
             </div>
           </Stack>
