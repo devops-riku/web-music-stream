@@ -129,6 +129,7 @@ function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState({});   // { [username]: bool }
   const [readBy, setReadBy] = useState({});             // { [theirUsername]: true } — they read my messages
+  const [unreadCounts, setUnreadCounts] = useState({}); // { [username]: number }
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -306,7 +307,13 @@ function App() {
       const res = await fetch(`${BACKEND_API}/api/messages/conversations`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      if (res.ok) setConversations(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data);
+        const counts = {};
+        data.forEach(c => { counts[c.other_username] = c.unread_count || 0; });
+        setUnreadCounts(counts);
+      }
     } catch (err) {
       console.error('Error loading conversations', err);
     }
@@ -508,6 +515,8 @@ function App() {
             setReadBy(prev => ({ ...prev, [msg.reader_username]: true }));
           } else if (msg.type === 'user_status') {
             setOnlineUsers(prev => ({ ...prev, [msg.username]: msg.online }));
+          } else if (msg.type === 'unread_update') {
+            setUnreadCounts(prev => ({ ...prev, [msg.sender_username]: msg.count }));
           }
         } catch {}
       };
@@ -555,6 +564,7 @@ function App() {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: 'mark_read', sender_username: username }));
         }
+        setUnreadCounts(prev => ({ ...prev, [username]: 0 }));
         // Fetch initial online status
         fetch(`${BACKEND_API}/api/users/${username}/online`)
           .then(r => r.json())
@@ -1737,29 +1747,41 @@ function App() {
                 ) : (
                   <Stack gap="xs">
                     {conversations.map(conv => (
-                      <Paper
-                        key={conv.other_user_id} p="md" radius="md"
-                        style={{ backgroundColor: '#131316', border: '1px solid #1e1e24', cursor: 'pointer' }}
-                        onClick={() => openConversation(conv.other_username)}
-                      >
-                        <Group gap="md" wrap="nowrap">
-                          <Indicator
-                            color={onlineUsers[conv.other_username] ? 'green' : 'gray'}
-                            position="bottom-end" size={9} offset={3}
-                            withBorder processing={onlineUsers[conv.other_username]}
+                      {(() => {
+                        const unread = unreadCounts[conv.other_username] || 0;
+                        return (
+                          <Paper
+                            key={conv.other_user_id} p="md" radius="md"
+                            style={{ backgroundColor: unread ? '#1a1025' : '#131316', border: `1px solid ${unread ? '#6d28d9' : '#1e1e24'}`, cursor: 'pointer' }}
+                            onClick={() => openConversation(conv.other_username)}
                           >
-                            <Avatar src={conv.other_profile_image} radius="xl"><IconUser size={16} /></Avatar>
-                          </Indicator>
-                          <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
-                            <Text size="sm" fw={700} truncate="end">{conv.other_display_name || conv.other_username}</Text>
-                            <Text size="xs" color="dimmed" truncate="end">@{conv.other_username}</Text>
-                            <Text size="xs" color="dimmed" truncate="end" style={{ opacity: 0.7 }}>{conv.last_message}</Text>
-                          </Stack>
-                          <Text size="10px" color="dimmed" style={{ whiteSpace: 'nowrap' }}>
-                            {fmtTime(conv.last_message_at)}
-                          </Text>
-                        </Group>
-                      </Paper>
+                            <Group gap="md" wrap="nowrap">
+                              <Indicator
+                                color={onlineUsers[conv.other_username] ? 'green' : 'gray'}
+                                position="bottom-end" size={9} offset={3}
+                                withBorder processing={onlineUsers[conv.other_username]}
+                              >
+                                <Avatar src={conv.other_profile_image} radius="xl"><IconUser size={16} /></Avatar>
+                              </Indicator>
+                              <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={unread ? 800 : 700} truncate="end">{conv.other_display_name || conv.other_username}</Text>
+                                <Text size="xs" color="dimmed" truncate="end">@{conv.other_username}</Text>
+                                <Text size="xs" truncate="end" style={{ color: unread ? '#fff' : 'rgba(255,255,255,0.45)', fontWeight: unread ? 600 : 400 }}>{conv.last_message}</Text>
+                              </Stack>
+                              <Stack gap={4} align="flex-end" style={{ flexShrink: 0 }}>
+                                <Text size="10px" color="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                                  {fmtTime(conv.last_message_at)}
+                                </Text>
+                                {unread > 0 && (
+                                  <div style={{ background: '#7c3aed', borderRadius: 10, minWidth: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 5px' }}>
+                                    <Text size="10px" fw={700} style={{ color: '#fff', lineHeight: 1 }}>{unread > 99 ? '99+' : unread}</Text>
+                                  </div>
+                                )}
+                              </Stack>
+                            </Group>
+                          </Paper>
+                        );
+                      })()}
                     ))}
                   </Stack>
                 )}
@@ -1797,11 +1819,9 @@ function App() {
                     <Group justify="center" py="xl"><Loader color="violet" type="dots" /></Group>
                   ) : messages.length === 0 ? (
                     <Text size="sm" color="dimmed" ta="center" mt="xl">No messages yet. Say hello!</Text>
-                  ) : (() => {
-                    const myMsgs = messages.filter(m => m.sender_username === userProfile?.auth_id);
-                    const lastMineId = myMsgs.length ? myMsgs[myMsgs.length - 1].id : null;
-                    return messages.map(msg => {
+                  ) : messages.map(msg => {
                       const isMine = msg.sender_username === userProfile?.auth_id;
+                      const lastMineId = messages.filter(m => m.sender_username === userProfile?.auth_id).at(-1)?.id;
                       const isLast = msg.id === lastMineId;
                       return (
                         <div key={msg.id} style={{ display: 'flex', justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
@@ -1825,8 +1845,7 @@ function App() {
                           </div>
                         </div>
                       );
-                    });
-                  })()
+                    })
                   )}
                   {remoteTyping && (
                     <div style={{ display: 'flex', justifyContent: 'flex-start' }}>

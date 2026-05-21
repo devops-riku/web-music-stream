@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+# In-memory last-read tracker: {user_id: {partner_id: naive_utc_datetime}}
+_last_read: Dict[int, Dict[int, datetime]] = {}
+
 from app.config import settings
 from app.db import Base, engine, get_db
 from app.models import User, LikedTrack, Message
@@ -546,6 +549,21 @@ async def send_message(
     await manager.send_to_user(current_user.id, payload)
     await manager.send_to_user(recipient.id, payload)
 
+    # Push updated unread count to recipient
+    last_read_ts = _last_read.get(recipient.id, {}).get(current_user.id)
+    unread_q = select(func.count(Message.id)).where(
+        Message.sender_id == current_user.id,
+        Message.recipient_id == recipient.id,
+    )
+    if last_read_ts:
+        unread_q = unread_q.where(Message.created_at > last_read_ts)
+    unread_count = db.scalar(unread_q) or 0
+    await manager.send_to_user(recipient.id, {
+        "type": "unread_update",
+        "sender_username": current_user.auth_id,
+        "count": unread_count,
+    })
+
     return MessageResponse(**{k: v for k, v in payload.items() if k != "type"})
 
 
@@ -588,6 +606,15 @@ async def get_conversations(
         if not last_msg:
             continue
 
+        last_read_ts = _last_read.get(current_user.id, {}).get(pid)
+        unread_q = select(func.count(Message.id)).where(
+            Message.sender_id == pid,
+            Message.recipient_id == current_user.id,
+        )
+        if last_read_ts:
+            unread_q = unread_q.where(Message.created_at > last_read_ts)
+        unread_count = db.scalar(unread_q) or 0
+
         conversations.append(ConversationSummary(
             other_user_id=partner.id,
             other_username=partner.auth_id,
@@ -595,7 +622,7 @@ async def get_conversations(
             other_profile_image=partner.profile_image,
             last_message=last_msg.content,
             last_message_at=last_msg.created_at,
-            unread_count=0,
+            unread_count=unread_count,
         ))
 
     conversations.sort(key=lambda c: c.last_message_at, reverse=True)
@@ -712,7 +739,6 @@ async def websocket_messages(ws: WebSocket, token: str):
                     })
 
             elif msg_type == "mark_read":
-                # Tell the sender their messages have been read by this user
                 sender_username = data.get("sender_username", "").strip().lower()
                 if not sender_username:
                     continue
@@ -722,9 +748,18 @@ async def websocket_messages(ws: WebSocket, token: str):
                 finally:
                     db2.close()
                 if sender:
+                    # Record when this user last read messages from sender
+                    _last_read.setdefault(user.id, {})[sender.id] = datetime.utcnow()
+                    # Tell sender their messages were read
                     await manager.send_to_user(sender.id, {
                         "type": "messages_read",
                         "reader_username": user.auth_id,
+                    })
+                    # Tell the reader their unread count for this conversation is now 0
+                    await manager.send_to_user(user.id, {
+                        "type": "unread_update",
+                        "sender_username": sender_username,
+                        "count": 0,
                     })
 
     except WebSocketDisconnect:
