@@ -60,7 +60,7 @@ class LikedTrackResponse(BaseModel):
 class MessageCreate(BaseModel):
     recipient_username: str
     content: str
-    reply_to_id: Optional[int] = None
+    reply_to_id: Optional[uuid.UUID] = None
 
 class MessageResponse(BaseModel):
     id: uuid.UUID
