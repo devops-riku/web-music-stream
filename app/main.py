@@ -622,7 +622,7 @@ async def get_settings(
     row = _get_or_create_settings(db)
     return SettingsResponse(
         music_source=row.music_source,
-        yt_format=row.yt_format or "bestaudio/best",
+        yt_format=row.yt_format or "bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio/best",
         has_yt_cookies=bool(row.yt_cookies),
         spotify_client_id=row.spotify_client_id,
         has_spotify_secret=bool(row.spotify_client_secret),
@@ -639,7 +639,7 @@ async def update_settings(
         raise HTTPException(status_code=401)
     row = _get_or_create_settings(db)
     row.music_source = body.music_source
-    row.yt_format = body.yt_format or "bestaudio/best"
+    row.yt_format = body.yt_format or "bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio/best"
     if body.yt_cookies_changed:
         row.yt_cookies = body.yt_cookies or None
     row.spotify_client_id = body.spotify_client_id or None

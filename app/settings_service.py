@@ -5,7 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class AppConfig:
     music_source: str = "soundcloud"
-    yt_format: str = "bestaudio/best"
+    yt_format: str = "bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio/best"
     yt_cookies: Optional[str] = None
     spotify_client_id: Optional[str] = None
     spotify_client_secret: Optional[str] = None
