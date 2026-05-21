@@ -289,39 +289,5 @@ class YouTubeMusicAPI:
                     mark_dead(instance)
         return None
 
-    async def pipe_audio(
-        self,
-        video_id: str,
-        yt_format: str = "bestaudio",
-        cookies_content: Optional[str] = None,
-    ):
-        """Spawn yt-dlp → ffmpeg, piping m4a to stdout. Returns (process, tmp_cookie_path)."""
-        import tempfile
-        tmp_path = None
-        cmd = ["yt-dlp"]
-        if cookies_content:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-                f.write(cookies_content)
-                tmp_path = f.name
-            cmd += ["--cookies", tmp_path]
-        elif os.path.isfile("/app/cookies.txt"):
-            cmd += ["--cookies", "/app/cookies.txt"]
-
-        cmd += [
-            "-f", yt_format or "bestaudio",
-            "-x", "--audio-format", "m4a", "--audio-quality", "0",
-            "--no-playlist", "--quiet", "--no-warnings",
-            "--extractor-args", "youtube:player_client=mweb,android_music,tv",
-            "-o", "-",
-            f"https://www.youtube.com/watch?v={video_id}",
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        return proc, tmp_path
-
-
 ytmusic_api = YouTubeMusicAPI()
 

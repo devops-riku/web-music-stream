@@ -69,7 +69,7 @@ class AppSettings(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     music_source: Mapped[str] = mapped_column(String, default="soundcloud")
-    yt_format: Mapped[str] = mapped_column(String, default="bestaudio[ext=m4a]/bestaudio[acodec=aac]/bestaudio/best")
+    yt_format: Mapped[str] = mapped_column(String, default="bestaudio/best")
     yt_cookies: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     spotify_client_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     spotify_client_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
