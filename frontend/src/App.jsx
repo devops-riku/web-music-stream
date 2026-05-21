@@ -24,6 +24,10 @@ import {
   Indicator,
   Progress,
   Box,
+  Textarea,
+  PasswordInput,
+  Divider,
+  FileButton,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -145,8 +149,17 @@ function App() {
   const [onlineUsers, setOnlineUsers] = useState({});   // { [username]: bool }
   const [readBy, setReadBy] = useState({});
   const [unreadCounts, setUnreadCounts] = useState({});
-  const [replyingTo, setReplyingTo] = useState(null);   // { id, content, sender_username }
+  const [replyingTo, setReplyingTo] = useState(null);
   const [hoveredMsgId, setHoveredMsgId] = useState(null);
+
+  // Settings
+  const [settingsData, setSettingsData] = useState(null);   // loaded from API
+  const [settingsSource, setSettingsSource] = useState('soundcloud');
+  const [settingsYtFormat, setSettingsYtFormat] = useState('bestaudio/best');
+  const [settingsCookies, setSettingsCookies] = useState(null);    // null = not changed
+  const [settingsSpotifyId, setSettingsSpotifyId] = useState('');
+  const [settingsSpotifySecret, setSettingsSpotifySecret] = useState(null); // null = not changed
+  const [savingSettings, setSavingSettings] = useState(false);
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -630,6 +643,55 @@ function App() {
     }
   };
 
+  const loadSettings = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await fetch(`${BACKEND_API}/api/settings`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setSettingsData(d);
+        setSettingsSource(d.music_source);
+        setSettingsYtFormat(d.yt_format);
+        setSettingsSpotifyId(d.spotify_client_id || '');
+        setSettingsCookies(null);
+        setSettingsSpotifySecret(null);
+      }
+    } catch {}
+  };
+
+  const saveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const res = await fetch(`${BACKEND_API}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          music_source: settingsSource,
+          yt_format: settingsYtFormat || 'bestaudio/best',
+          yt_cookies: settingsCookies,
+          yt_cookies_changed: settingsCookies !== null,
+          spotify_client_id: settingsSpotifyId || null,
+          spotify_client_secret: settingsSpotifySecret,
+          spotify_secret_changed: settingsSpotifySecret !== null,
+        })
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setSettingsData(d);
+        setSettingsCookies(null);
+        setSettingsSpotifySecret(null);
+        setPlaybackMessage({ type: 'success', text: 'Settings saved.' });
+      } else {
+        const err = await res.json();
+        setPlaybackMessage({ type: 'error', text: err.detail || 'Failed to save settings.' });
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   const searchUsers = async (q) => {
     if (!q.trim() || !accessToken) { setUserSearchResults([]); return; }
     try {
@@ -642,6 +704,7 @@ function App() {
 
   useEffect(() => {
     if (activeTab === 'messages' && accessToken) fetchConversations();
+    if (activeTab === 'settings' && accessToken) loadSettings();
   }, [activeTab, accessToken]);
 
   // 4. Search Handler
@@ -1180,6 +1243,25 @@ function App() {
             </div>
 
             <div
+              className={`nav-item ${activeTab === 'settings' ? 'nav-item-active' : ''}`}
+              onClick={() => {
+                if (!accessToken) {
+                  setAuthMode('login');
+                  openAuthModal();
+                } else {
+                  setActiveTab('settings');
+                  loadSettings();
+                  toggleMobile();
+                }
+              }}
+            >
+              <Group gap="md">
+                <IconSettings size={18} />
+                <span>Settings</span>
+              </Group>
+            </div>
+
+            <div
               className={`nav-item ${activeTab === 'messages' ? 'nav-item-active' : ''}`}
               onClick={() => {
                 if (!accessToken) {
@@ -1708,6 +1790,143 @@ function App() {
                 </Button>
               </Paper>
             )}
+          </Stack>
+        )}
+
+        {/* VIEW: SETTINGS */}
+        {activeTab === 'settings' && (
+          <Stack gap="lg">
+            <Text fw={800} size="xl" style={{ letterSpacing: '-0.5px' }}>Settings</Text>
+
+            {/* ── Music Source ── */}
+            <Stack gap="xs">
+              <Text fw={700} size="sm" style={{ color: '#a78bfa' }}>Music Source</Text>
+              <Group gap="sm">
+                {[
+                  { value: 'soundcloud', label: 'SoundCloud', icon: '🎵', desc: 'No auth needed' },
+                  { value: 'youtube', label: 'YouTube Music', icon: '▶', desc: 'Cookies optional' },
+                  { value: 'spotify', label: 'Spotify', icon: '🎧', desc: 'API key required' },
+                ].map(src => (
+                  <Paper
+                    key={src.value}
+                    p="md"
+                    radius="lg"
+                    onClick={() => setSettingsSource(src.value)}
+                    style={{
+                      flex: 1, cursor: 'pointer', textAlign: 'center',
+                      backgroundColor: settingsSource === src.value ? '#3b0764' : '#131316',
+                      border: `2px solid ${settingsSource === src.value ? '#7c3aed' : '#1f1f23'}`,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <Text size="xl">{src.icon}</Text>
+                    <Text size="sm" fw={700} style={{ color: '#fff' }}>{src.label}</Text>
+                    <Text size="xs" style={{ color: 'rgba(255,255,255,0.4)' }}>{src.desc}</Text>
+                  </Paper>
+                ))}
+              </Group>
+            </Stack>
+
+            <Divider color="#1f1f23" />
+
+            {/* ── yt-dlp Settings ── */}
+            <Stack gap="sm">
+              <Text fw={700} size="sm" style={{ color: '#a78bfa' }}>yt-dlp Settings</Text>
+              <TextInput
+                label="Format string"
+                description="Passed to yt-dlp -f. E.g. bestaudio/best, bestaudio[ext=m4a]/best"
+                value={settingsYtFormat}
+                onChange={e => setSettingsYtFormat(e.target.value)}
+                placeholder="bestaudio/best"
+                styles={{ input: { backgroundColor: '#18181b', border: '1px solid #27272a', color: '#fff' }, label: { color: 'rgba(255,255,255,0.7)' }, description: { color: 'rgba(255,255,255,0.35)' } }}
+              />
+            </Stack>
+
+            {/* ── YouTube Cookies ── */}
+            {(settingsSource === 'youtube' || settingsSource === 'spotify') && (
+              <Stack gap="sm">
+                <Text fw={700} size="sm" style={{ color: '#a78bfa' }}>YouTube Cookies</Text>
+                <Text size="xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                  Paste the content of your <code>cookies.txt</code> file (Netscape format), or upload it.
+                  Used for yt-dlp authentication to unlock age-restricted / region-locked tracks.
+                </Text>
+                <Group gap="xs" align="flex-start">
+                  <Textarea
+                    style={{ flex: 1 }}
+                    placeholder={settingsData?.has_yt_cookies ? '● cookies saved — paste new content to replace' : 'Paste cookies.txt content here…'}
+                    value={settingsCookies === null ? '' : settingsCookies}
+                    onChange={e => setSettingsCookies(e.target.value)}
+                    minRows={3}
+                    maxRows={6}
+                    autosize
+                    styles={{ input: { backgroundColor: '#18181b', border: '1px solid #27272a', color: '#fff', fontFamily: 'monospace', fontSize: 11 } }}
+                  />
+                  <Stack gap="xs">
+                    <FileButton
+                      accept=".txt"
+                      onChange={file => {
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = e => setSettingsCookies(e.target.result);
+                        reader.readAsText(file);
+                      }}
+                    >
+                      {props => (
+                        <Button {...props} size="xs" variant="light" color="violet">
+                          Upload
+                        </Button>
+                      )}
+                    </FileButton>
+                    {(settingsCookies !== null || settingsData?.has_yt_cookies) && (
+                      <Button size="xs" variant="subtle" color="red" onClick={() => setSettingsCookies('')}>
+                        Clear
+                      </Button>
+                    )}
+                  </Stack>
+                </Group>
+                {settingsData?.has_yt_cookies && settingsCookies === null && (
+                  <Text size="xs" style={{ color: '#4ade80' }}>✓ Cookies currently saved on server</Text>
+                )}
+              </Stack>
+            )}
+
+            {/* ── Spotify Credentials ── */}
+            {settingsSource === 'spotify' && (
+              <Stack gap="sm">
+                <Divider color="#1f1f23" />
+                <Text fw={700} size="sm" style={{ color: '#a78bfa' }}>Spotify API Credentials</Text>
+                <Text size="xs" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                  Create an app at <strong>developer.spotify.com</strong> → Dashboard. Use the Client ID and Secret below.
+                </Text>
+                <TextInput
+                  label="Client ID"
+                  value={settingsSpotifyId}
+                  onChange={e => setSettingsSpotifyId(e.target.value)}
+                  placeholder="Enter Spotify Client ID"
+                  styles={{ input: { backgroundColor: '#18181b', border: '1px solid #27272a', color: '#fff' }, label: { color: 'rgba(255,255,255,0.7)' } }}
+                />
+                <PasswordInput
+                  label="Client Secret"
+                  placeholder={settingsData?.has_spotify_secret ? '● saved — type to replace' : 'Enter Spotify Client Secret'}
+                  value={settingsSpotifySecret === null ? '' : settingsSpotifySecret}
+                  onChange={e => setSettingsSpotifySecret(e.target.value)}
+                  styles={{ input: { backgroundColor: '#18181b', border: '1px solid #27272a', color: '#fff' }, label: { color: 'rgba(255,255,255,0.7)' } }}
+                />
+                {settingsData?.has_spotify_secret && settingsSpotifySecret === null && (
+                  <Text size="xs" style={{ color: '#4ade80' }}>✓ Client secret currently saved on server</Text>
+                )}
+              </Stack>
+            )}
+
+            <Button
+              color="violet"
+              radius="xl"
+              loading={savingSettings}
+              onClick={saveSettings}
+              style={{ alignSelf: 'flex-start' }}
+            >
+              Save Settings
+            </Button>
           </Stack>
         )}
 

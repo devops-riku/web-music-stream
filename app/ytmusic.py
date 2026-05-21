@@ -118,8 +118,18 @@ class YouTubeMusicAPI:
         # Fallback: search for popular tracks
         return self.search("top hits 2024", limit=limit)
 
-    async def get_stream_url(self, video_id: str) -> Optional[str]:
-        # 1) Try Piped instances (they proxy YouTube for us)
+    async def get_stream_url(
+        self,
+        video_id: str,
+        yt_format: str = "bestaudio/best",
+        cookies_content: Optional[str] = None,
+    ) -> Optional[str]:
+        # If caller supplied cookies, skip public proxies and go straight to yt-dlp
+        if cookies_content:
+            return await asyncio.get_event_loop().run_in_executor(
+                None, self._get_stream_url_ytdlp, video_id, yt_format, cookies_content
+            )
+        # 1) Try Piped instances
         url = await self._get_stream_url_piped(video_id)
         if url:
             return url
@@ -127,24 +137,36 @@ class YouTubeMusicAPI:
         url = await self._get_stream_url_invidious(video_id)
         if url:
             return url
-        # 3) Fall back to yt-dlp (will fail if YouTube is blocked from this server)
-        return await asyncio.get_event_loop().run_in_executor(None, self._get_stream_url_ytdlp, video_id)
+        # 3) Fall back to yt-dlp
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self._get_stream_url_ytdlp, video_id, yt_format, None
+        )
 
-    def _get_stream_url_ytdlp(self, video_id: str) -> Optional[str]:
-        cookies_src = "/app/cookies.txt"
-        cookies_tmp = "/tmp/yt_cookies.txt"
-        if os.path.isfile(cookies_src):
-            shutil.copy2(cookies_src, cookies_tmp)
+    def _get_stream_url_ytdlp(
+        self,
+        video_id: str,
+        yt_format: str = "bestaudio/best",
+        cookies_content: Optional[str] = None,
+    ) -> Optional[str]:
+        import tempfile
+        tmp_path = None
+        if cookies_content:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+                f.write(cookies_content)
+                tmp_path = f.name
+        elif os.path.isfile("/app/cookies.txt"):
+            shutil.copy2("/app/cookies.txt", "/tmp/yt_cookies.txt")
+            tmp_path = "/tmp/yt_cookies.txt"
 
         ydl_opts = {
-            "format": "bestaudio/best",
+            "format": yt_format,
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
             "extractor_args": {"youtube": {"player_client": ["mweb", "android_music", "tv"]}},
         }
-        if os.path.isfile(cookies_tmp):
-            ydl_opts["cookiefile"] = cookies_tmp
+        if tmp_path:
+            ydl_opts["cookiefile"] = tmp_path
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -164,6 +186,12 @@ class YouTubeMusicAPI:
         except Exception as e:
             print(f"yt-dlp failed for {video_id}: {e}")
             return None
+        finally:
+            if cookies_content and tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
 
     async def _get_stream_url_piped(self, video_id: str) -> Optional[str]:
         instances = [

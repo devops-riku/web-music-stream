@@ -3,12 +3,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import or_, and_, func, select
 from sqlalchemy.orm import Session
-from typing import Dict, List
+from typing import Dict, List, Optional
 from pydantic import BaseModel
+import asyncio
 import json
+import uuid
 import httpx
 import secrets
 from datetime import datetime, timezone
+
+
+def _json_serial(obj):
+    """JSON serializer that handles uuid.UUID and datetime objects."""
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object {obj!r} is not JSON serializable")
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -29,7 +40,7 @@ def _upsert_last_read(db: Session, user_id: int, partner_id: int) -> None:
 
 from app.config import settings
 from app.db import Base, engine, get_db
-from app.models import User, LikedTrack, Message, ConversationRead
+from app.models import User, LikedTrack, Message, ConversationRead, AppSettings
 from app.schemas import (
     TrackResponse,
     LikedTrackCreate,
@@ -38,9 +49,13 @@ from app.schemas import (
     MessageCreate,
     MessageResponse,
     ConversationSummary,
+    SettingsResponse,
+    SettingsUpdate,
 )
 from app.soundcloud import soundcloud_api
-from app.ytmusic import _enrich_with_itunes
+from app.ytmusic import ytmusic_api, _enrich_with_itunes
+from app.spotify import spotify_search, spotify_trending, spotify_get_stream_url
+from app.settings_service import get_config, invalidate as invalidate_config
 from app.auth import (
     hash_password,
     verify_password,
@@ -58,33 +73,36 @@ except Exception:
 
 class ConnectionManager:
     def __init__(self):
-        # user_id -> list of active WebSocket connections (multiple tabs)
-        self.active: Dict[int, list] = {}
+        self.active: Dict[uuid.UUID, list] = {}
 
-    async def connect(self, user_id: int, ws: WebSocket):
+    async def connect(self, user_id: uuid.UUID, ws: WebSocket):
         await ws.accept()
         self.active.setdefault(user_id, []).append(ws)
 
-    def disconnect(self, user_id: int, ws: WebSocket):
+    def disconnect(self, user_id: uuid.UUID, ws: WebSocket):
         conns = self.active.get(user_id, [])
         if ws in conns:
             conns.remove(ws)
         if not conns:
             self.active.pop(user_id, None)
 
-    async def send_to_user(self, user_id: int, data: dict):
+    async def send_to_user(self, user_id: uuid.UUID, data: dict):
+        text = json.dumps(data, default=_json_serial)
         for ws in self.active.get(user_id, []):
             try:
-                await ws.send_text(json.dumps(data))
+                await ws.send_text(text)
             except Exception:
                 pass
 
     async def broadcast_status(self, username: str, online: bool):
-        payload = {"type": "user_status", "username": username, "online": online}
-        for uid, conns in list(self.active.items()):
+        payload = json.dumps(
+            {"type": "user_status", "username": username, "online": online},
+            default=_json_serial,
+        )
+        for conns in list(self.active.values()):
             for ws in conns:
                 try:
-                    await ws.send_text(json.dumps(payload))
+                    await ws.send_text(payload)
                 except Exception:
                     pass
 
@@ -217,6 +235,30 @@ async def get_me(current_user: User = Depends(get_current_user_or_guest)):
 
 # ─── Home / Trending ─────────────────────────────────────────────────────────
 
+async def _fetch_tracks(source: str, mode: str, q: str, limit: int, cfg) -> List[dict]:
+    """Dispatch search/trending to the configured source."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    if source == "youtube":
+        if mode == "trending":
+            return ytmusic_api.get_trending(limit)
+        return ytmusic_api.search(q, limit)
+    if source == "spotify":
+        if not (cfg.spotify_client_id and cfg.spotify_client_secret):
+            raise HTTPException(status_code=400, detail="Spotify credentials not configured.")
+        if mode == "trending":
+            return await loop.run_in_executor(
+                None, spotify_trending, limit, cfg.spotify_client_id, cfg.spotify_client_secret
+            )
+        return await loop.run_in_executor(
+            None, spotify_search, q, limit, cfg.spotify_client_id, cfg.spotify_client_secret
+        )
+    # default: soundcloud
+    if mode == "trending":
+        return await soundcloud_api.get_trending(limit)
+    return await soundcloud_api.search(q, limit)
+
+
 @app.get("/api/home", response_model=List[TrackResponse])
 async def get_home_tracks(
     limit: int = Query(20, ge=1, le=50),
@@ -224,8 +266,10 @@ async def get_home_tracks(
     current_user: User = Depends(get_current_user_or_guest)
 ):
     try:
-        tracks = await soundcloud_api.get_trending(limit)
-        tracks = await _enrich_with_itunes(tracks)
+        cfg = get_config(db)
+        tracks = await _fetch_tracks(cfg.music_source, "trending", "", limit, cfg)
+        if cfg.music_source != "spotify":
+            tracks = await _enrich_with_itunes(tracks)
 
         track_ids = [t["track_id"] for t in tracks]
         if track_ids:
@@ -238,6 +282,8 @@ async def get_home_tracks(
                 track["is_liked"] = track["track_id"] in local_liked_ids
 
         return tracks
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch home tracks: {str(e)}")
 
@@ -252,9 +298,11 @@ async def search_tracks(
     current_user: User = Depends(get_current_user_or_guest)
 ):
     try:
-        tracks = await soundcloud_api.search(q, offset + limit)
+        cfg = get_config(db)
+        tracks = await _fetch_tracks(cfg.music_source, "search", q, offset + limit, cfg)
         tracks = tracks[offset:offset + limit]
-        tracks = await _enrich_with_itunes(tracks)
+        if cfg.music_source != "spotify":
+            tracks = await _enrich_with_itunes(tracks)
 
         track_ids = [t["track_id"] for t in tracks]
         if track_ids:
@@ -267,6 +315,8 @@ async def search_tracks(
                 track["is_liked"] = track["track_id"] in local_liked_ids
 
         return tracks
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
@@ -333,20 +383,28 @@ async def get_liked_tracks(
 
 # ─── Streaming ───────────────────────────────────────────────────────────────
 
+async def _resolve_url(id: str, db) -> Optional[str]:
+    """Route stream resolution based on track_id format."""
+    cfg = get_config(db)
+    if id.startswith("spotify|"):
+        return await spotify_get_stream_url(id, cfg.yt_format, cfg.yt_cookies)
+    if id.startswith("http"):
+        # SoundCloud URL
+        return await soundcloud_api.get_stream_url(id)
+    # YouTube video ID
+    return await ytmusic_api.get_stream_url(id, cfg.yt_format, cfg.yt_cookies)
+
+
 @app.get("/api/player/resolve")
-async def resolve_stream(id: str = Query(..., description="YouTube Video ID")):
-    """
-    Resolve a direct audio URL via Piped / Invidious (server-to-server, no CORS).
-    Returns the URL for the frontend to play directly.
-    """
-    url = await soundcloud_api.get_stream_url(id)
+async def resolve_stream(id: str = Query(...), db: Session = Depends(get_db)):
+    url = await _resolve_url(id, db)
     if not url:
         raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
     return {"url": url}
 
 @app.get("/api/player/stream")
-async def proxy_stream(request: Request, id: str = Query(..., description="YouTube Video ID")):
-    url = await soundcloud_api.get_stream_url(id)
+async def proxy_stream(request: Request, id: str = Query(...), db: Session = Depends(get_db)):
+    url = await _resolve_url(id, db)
     if not url:
         raise HTTPException(status_code=404, detail="Could not extract stream URL.")
 
@@ -520,6 +578,63 @@ async def jam_websocket(ws: WebSocket, room_id: str, token: str):
                 "action": "left",
                 "member_count": jam_manager.member_count(room_id),
             })
+
+
+# ─── Settings ────────────────────────────────────────────────────────────────
+
+def _get_or_create_settings(db: Session) -> AppSettings:
+    row = db.scalar(select(AppSettings).limit(1))
+    if not row:
+        row = AppSettings()
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def get_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user:
+        raise HTTPException(status_code=401)
+    row = _get_or_create_settings(db)
+    return SettingsResponse(
+        music_source=row.music_source,
+        yt_format=row.yt_format or "bestaudio/best",
+        has_yt_cookies=bool(row.yt_cookies),
+        spotify_client_id=row.spotify_client_id,
+        has_spotify_secret=bool(row.spotify_client_secret),
+    )
+
+
+@app.put("/api/settings", response_model=SettingsResponse)
+async def update_settings(
+    body: SettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not current_user:
+        raise HTTPException(status_code=401)
+    row = _get_or_create_settings(db)
+    row.music_source = body.music_source
+    row.yt_format = body.yt_format or "bestaudio/best"
+    if body.yt_cookies_changed:
+        row.yt_cookies = body.yt_cookies or None
+    row.spotify_client_id = body.spotify_client_id or None
+    if body.spotify_secret_changed:
+        row.spotify_client_secret = body.spotify_client_secret or None
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    invalidate_config()
+    return SettingsResponse(
+        music_source=row.music_source,
+        yt_format=row.yt_format,
+        has_yt_cookies=bool(row.yt_cookies),
+        spotify_client_id=row.spotify_client_id,
+        has_spotify_secret=bool(row.spotify_client_secret),
+    )
 
 
 # ─── Messaging ───────────────────────────────────────────────────────────────
@@ -780,13 +895,27 @@ async def websocket_messages(ws: WebSocket, token: str):
     await manager.broadcast_status(user.auth_id, online=True)
     try:
         while True:
-            raw = await ws.receive_text()
+            try:
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=25)
+            except asyncio.TimeoutError:
+                # Keepalive: send ping; if the connection is dead this raises and we exit
+                try:
+                    await ws.send_text('{"type":"ping"}')
+                except Exception:
+                    break
+                continue
+            except WebSocketDisconnect:
+                break
+
             try:
                 data = json.loads(raw)
             except Exception:
                 continue
 
             msg_type = data.get("type")
+
+            if msg_type in ("ping", "pong"):
+                continue
 
             if msg_type == "typing":
                 recipient_username = data.get("recipient_username", "").strip().lower()
@@ -815,19 +944,18 @@ async def websocket_messages(ws: WebSocket, token: str):
                 finally:
                     db2.close()
                 if sender:
-                    # Tell sender their messages were read
                     await manager.send_to_user(sender.id, {
                         "type": "messages_read",
                         "reader_username": user.auth_id,
                     })
-                    # Tell the reader their unread count for this conversation is now 0
                     await manager.send_to_user(user.id, {
                         "type": "unread_update",
                         "sender_username": sender_username,
                         "count": 0,
                     })
 
-    except WebSocketDisconnect:
+    finally:
         manager.disconnect(user.id, ws)
-        # Notify contacts that this user went offline
-        await manager.broadcast_status(user.auth_id, online=False)
+        # Only broadcast offline when this was the user's last active connection
+        if not manager.active.get(user.id):
+            await manager.broadcast_status(user.auth_id, online=False)

@@ -1,6 +1,7 @@
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List
 from datetime import datetime
+import uuid
 
 # --- User Schemas ---
 class UserBase(BaseModel):
@@ -13,7 +14,7 @@ class UserCreate(UserBase):
     pass
 
 class UserResponse(UserBase):
-    id: int
+    id: uuid.UUID
     created_at: datetime
 
     class Config:
@@ -41,8 +42,8 @@ class LikedTrackCreate(BaseModel):
     duration_ms: Optional[int] = None
 
 class LikedTrackResponse(BaseModel):
-    id: int
-    user_id: int
+    id: uuid.UUID
+    user_id: uuid.UUID
     track_id: str
     name: str
     artist: str
@@ -62,14 +63,14 @@ class MessageCreate(BaseModel):
     reply_to_id: Optional[int] = None
 
 class MessageResponse(BaseModel):
-    id: int
-    sender_id: int
-    recipient_id: int
+    id: uuid.UUID
+    sender_id: uuid.UUID
+    recipient_id: uuid.UUID
     sender_username: str
     recipient_username: str
     content: str
     created_at: datetime
-    reply_to_id: Optional[int] = None
+    reply_to_id: Optional[uuid.UUID] = None
     reply_to_content: Optional[str] = None
     reply_to_sender: Optional[str] = None
 
@@ -77,13 +78,30 @@ class MessageResponse(BaseModel):
         from_attributes = True
 
 class ConversationSummary(BaseModel):
-    other_user_id: int
+    other_user_id: uuid.UUID
     other_username: str
     other_display_name: Optional[str]
     other_profile_image: Optional[str]
     last_message: str
     last_message_at: datetime
     unread_count: int
+
+# --- Settings Schemas ---
+class SettingsResponse(BaseModel):
+    music_source: str
+    yt_format: str
+    has_yt_cookies: bool
+    spotify_client_id: Optional[str] = None
+    has_spotify_secret: bool
+
+class SettingsUpdate(BaseModel):
+    music_source: str
+    yt_format: str
+    yt_cookies: Optional[str] = None        # None = keep existing; "" = clear
+    yt_cookies_changed: bool = False        # True = write yt_cookies field
+    spotify_client_id: Optional[str] = None
+    spotify_client_secret: Optional[str] = None   # None = keep; "" = clear
+    spotify_secret_changed: bool = False
 
 # --- Auth Schemas ---
 class TokenResponse(BaseModel):

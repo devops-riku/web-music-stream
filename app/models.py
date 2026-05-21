@@ -1,13 +1,15 @@
-from sqlalchemy import String, ForeignKey, UniqueConstraint, DateTime, Text
+import uuid
+from sqlalchemy import String, ForeignKey, UniqueConstraint, DateTime, Text, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from typing import List, Optional
 from app.db import Base
 
+
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     auth_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     email: Mapped[Optional[str]] = mapped_column(String, index=True, nullable=True)
@@ -15,7 +17,6 @@ class User(Base):
     password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    # Relationships
     liked_tracks: Mapped[List["LikedTrack"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
@@ -23,11 +24,12 @@ class User(Base):
     def __repr__(self) -> str:
         return f"<User {self.auth_id} ({self.display_name})>"
 
+
 class LikedTrack(Base):
     __tablename__ = "liked_tracks"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     track_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     artist: Mapped[str] = mapped_column(String, nullable=False)
@@ -37,10 +39,8 @@ class LikedTrack(Base):
     duration_ms: Mapped[Optional[int]] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    # Relationships
     user: Mapped["User"] = relationship(back_populates="liked_tracks")
 
-    # Constraints
     __table_args__ = (
         UniqueConstraint("user_id", "track_id", name="uq_user_track_like"),
     )
@@ -52,21 +52,34 @@ class LikedTrack(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sender_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    recipient_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    reply_to_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    reply_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
 
     sender: Mapped["User"] = relationship("User", foreign_keys=[sender_id])
     recipient: Mapped["User"] = relationship("User", foreign_keys=[recipient_id])
+
+
+class AppSettings(Base):
+    """Singleton — always query with .limit(1), never by id value."""
+    __tablename__ = "app_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    music_source: Mapped[str] = mapped_column(String, default="soundcloud")
+    yt_format: Mapped[str] = mapped_column(String, default="bestaudio/best")
+    yt_cookies: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    spotify_client_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    spotify_client_secret: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class ConversationRead(Base):
     """Tracks when a user last read messages from a specific partner."""
     __tablename__ = "conversation_reads"
 
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    partner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    partner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     last_read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
