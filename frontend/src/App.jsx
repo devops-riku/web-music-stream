@@ -126,6 +126,9 @@ function App() {
   const [userSearchResults, setUserSearchResults] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState({});   // { [username]: bool }
+  const [readBy, setReadBy] = useState({});             // { [theirUsername]: true } — they read my messages
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -317,14 +320,39 @@ function App() {
   };
 
   const connectJamWs = (roomId) => {
-    if (jamWsRef.current) jamWsRef.current.close();
-    const ws = new WebSocket(`${BACKEND_WS}/ws/jam/${roomId}?token=${accessToken}`);
-    ws.onopen = () => { jamWsRef.current = ws; };
-    ws.onmessage = (e) => {
-      try { handleJamMessageRef.current?.(JSON.parse(e.data)); } catch {}
+    jamWsRef.current?.close();
+    let jamRetryDelay = 1000;
+    let jamRetryTimer = null;
+
+    const connect = () => {
+      if (!jamRoomIdRef.current) return; // room gone, stop retrying
+      const ws = new WebSocket(`${BACKEND_WS}/ws/jam/${roomId}?token=${accessToken}`);
+
+      ws.onopen = () => {
+        jamWsRef.current = ws;
+        jamRetryDelay = 1000;
+      };
+      ws.onmessage = (e) => {
+        try { handleJamMessageRef.current?.(JSON.parse(e.data)); } catch {}
+      };
+      ws.onerror = () => {};
+      ws.onclose = (e) => {
+        jamWsRef.current = null;
+        // 4001 = auth failed, 4004 = room not found — don't retry
+        if (jamRoomIdRef.current && e.code !== 4001 && e.code !== 4004) {
+          jamRetryTimer = setTimeout(() => {
+            jamRetryDelay = Math.min(jamRetryDelay * 2, 15000);
+            connect();
+          }, jamRetryDelay);
+        } else {
+          setJamRoom(null);
+          setIsJamHost(false);
+        }
+      };
     };
-    ws.onclose = () => { jamWsRef.current = null; };
-    ws.onerror = () => {};
+
+    connect();
+    return () => clearTimeout(jamRetryTimer);
   };
 
   const handleJamMessage = (msg) => {
@@ -438,7 +466,7 @@ function App() {
     if (jamCode && accessToken) joinJam(jamCode);
   }, [accessToken]);
 
-  // WebSocket: connect when logged in, disconnect on logout
+  // WebSocket: connect when logged in, reconnect with exponential backoff on drop
   useEffect(() => {
     if (!accessToken) {
       wsRef.current?.close();
@@ -447,38 +475,62 @@ function App() {
     }
 
     let cancelled = false;
-    const ws = new WebSocket(`${BACKEND_WS}/ws/messages?token=${accessToken}`);
+    let retryDelay = 1000;
+    let retryTimer = null;
 
-    ws.onopen = () => {
-      if (cancelled) { ws.close(); return; }
+    const connect = () => {
+      if (cancelled) return;
+      const ws = new WebSocket(`${BACKEND_WS}/ws/messages?token=${accessToken}`);
+
+      ws.onopen = () => {
+        if (cancelled) { ws.close(); return; }
+        wsRef.current = ws;
+        retryDelay = 1000;
+        setWsConnected(true);
+      };
+
+      ws.onmessage = (e) => {
+        if (cancelled) return;
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'new_message') {
+            setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
+            setRemoteTyping(false);
+            fetchConversations();
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+          } else if (msg.type === 'typing') {
+            setRemoteTyping(true);
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = setTimeout(() => setRemoteTyping(false), 3000);
+          } else if (msg.type === 'messages_read') {
+            setReadBy(prev => ({ ...prev, [msg.reader_username]: true }));
+          } else if (msg.type === 'user_status') {
+            setOnlineUsers(prev => ({ ...prev, [msg.username]: msg.online }));
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        wsRef.current = null;
+        setWsConnected(false);
+        if (!cancelled) {
+          retryTimer = setTimeout(() => {
+            retryDelay = Math.min(retryDelay * 2, 30000);
+            connect();
+          }, retryDelay);
+        }
+      };
+
       wsRef.current = ws;
     };
 
-    ws.onmessage = (e) => {
-      if (cancelled) return;
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'new_message') {
-          setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
-          setRemoteTyping(false);
-          fetchConversations();
-          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-        } else if (msg.type === 'typing') {
-          setRemoteTyping(true);
-          clearTimeout(typingTimeoutRef.current);
-          typingTimeoutRef.current = setTimeout(() => setRemoteTyping(false), 3000);
-        }
-      } catch {}
-    };
-
-    ws.onerror = () => {};
-    ws.onclose = () => { if (!cancelled) wsRef.current = null; };
+    connect();
 
     return () => {
       cancelled = true;
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close();
-      }
+      clearTimeout(retryTimer);
+      wsRef.current?.close();
       wsRef.current = null;
     };
   }, [accessToken]);
@@ -497,6 +549,15 @@ function App() {
         setActiveConversation(username);
         setMessages(await res.json());
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+        // Tell the other user their messages have been read
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'mark_read', sender_username: username }));
+        }
+        // Fetch initial online status
+        fetch(`${BACKEND_API}/api/users/${username}/online`)
+          .then(r => r.json())
+          .then(d => setOnlineUsers(prev => ({ ...prev, [username]: d.online })))
+          .catch(() => {});
       }
     } catch (err) {
       console.error('Error loading messages', err);
@@ -1680,14 +1741,20 @@ function App() {
                         onClick={() => openConversation(conv.other_username)}
                       >
                         <Group gap="md" wrap="nowrap">
-                          <Avatar src={conv.other_profile_image} radius="xl"><IconUser size={16} /></Avatar>
+                          <Indicator
+                            color={onlineUsers[conv.other_username] ? 'green' : 'gray'}
+                            position="bottom-end" size={9} offset={3}
+                            withBorder processing={onlineUsers[conv.other_username]}
+                          >
+                            <Avatar src={conv.other_profile_image} radius="xl"><IconUser size={16} /></Avatar>
+                          </Indicator>
                           <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
                             <Text size="sm" fw={700} truncate="end">{conv.other_display_name || conv.other_username}</Text>
                             <Text size="xs" color="dimmed" truncate="end">@{conv.other_username}</Text>
                             <Text size="xs" color="dimmed" truncate="end" style={{ opacity: 0.7 }}>{conv.last_message}</Text>
                           </Stack>
                           <Text size="10px" color="dimmed" style={{ whiteSpace: 'nowrap' }}>
-                            {new Date(conv.last_message_at).toLocaleDateString()}
+                            {fmtTime(conv.last_message_at)}
                           </Text>
                         </Group>
                       </Paper>
@@ -1703,7 +1770,23 @@ function App() {
                   <ActionIcon variant="subtle" color="gray" onClick={() => { setActiveConversation(null); setMessages([]); setRemoteTyping(false); clearTimeout(typingTimeoutRef.current); }}>
                     <IconChevronLeft size={18} />
                   </ActionIcon>
-                  <Text fw={700} size="md">@{activeConversation}</Text>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{
+                      width: 8, height: 8, borderRadius: '50%',
+                      background: onlineUsers[activeConversation] ? '#4ade80' : '#6b7280',
+                      boxShadow: onlineUsers[activeConversation] ? '0 0 6px #4ade80' : 'none',
+                      flexShrink: 0,
+                    }} />
+                    <Text fw={700} size="md">@{activeConversation}</Text>
+                    <Text size="xs" color={onlineUsers[activeConversation] ? 'green' : 'dimmed'}>
+                      {onlineUsers[activeConversation] ? 'Online' : 'Offline'}
+                    </Text>
+                  </div>
+                  {!wsConnected && (
+                    <Badge color="orange" variant="dot" size="sm" style={{ marginLeft: 'auto' }}>
+                      Reconnecting…
+                    </Badge>
+                  )}
                 </Group>
 
                 {/* Scrollable messages — leaves 56px at bottom for input */}
@@ -1724,9 +1807,16 @@ function App() {
                             padding: '8px 14px',
                           }}>
                             <Text size="sm" style={{ color: '#fff', wordBreak: 'break-word' }}>{msg.content}</Text>
-                            <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-                              {fmtTime(msg.created_at)}
-                            </Text>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 3, marginTop: 2 }}>
+                              <Text size="10px" style={{ color: 'rgba(255,255,255,0.5)' }}>
+                                {fmtTime(msg.created_at)}
+                              </Text>
+                              {isMine && (
+                                <Text size="10px" style={{ color: readBy[activeConversation] ? '#4ade80' : 'rgba(255,255,255,0.5)', lineHeight: 1 }}>
+                                  {readBy[activeConversation] ? '✓✓' : '✓'}
+                                </Text>
+                              )}
+                            </div>
                           </div>
                         </div>
                       );
@@ -1751,8 +1841,9 @@ function App() {
                 {/* Input pinned at bottom */}
                 <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
                   <TextInput
-                    placeholder="Type a message..."
+                    placeholder={wsConnected ? 'Type a message…' : 'Reconnecting…'}
                     value={newMessage}
+                    disabled={!wsConnected}
                     onChange={(e) => {
                       setNewMessage(e.target.value);
                       if (wsRef.current?.readyState === WebSocket.OPEN && activeConversation) {
@@ -1769,7 +1860,7 @@ function App() {
                     size="lg" color="violet" variant="filled" radius="xl"
                     onClick={sendMessage}
                     loading={sendingMessage}
-                    disabled={!newMessage.trim()}
+                    disabled={!newMessage.trim() || !wsConnected}
                   >
                     <IconSend size={16} />
                   </ActionIcon>

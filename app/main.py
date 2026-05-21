@@ -65,6 +65,15 @@ class ConnectionManager:
             except Exception:
                 pass
 
+    async def broadcast_status(self, username: str, online: bool):
+        payload = {"type": "user_status", "username": username, "online": online}
+        for uid, conns in list(self.active.items()):
+            for ws in conns:
+                try:
+                    await ws.send_text(json.dumps(payload))
+                except Exception:
+                    pass
+
 manager = ConnectionManager()
 
 # ─── Jam Room State & Manager ─────────────────────────────────────────────────
@@ -629,6 +638,14 @@ async def get_conversation(
     ]
 
 
+@app.get("/api/users/{username}/online")
+async def user_online_status(username: str, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.auth_id == username.lower()))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"online": bool(manager.active.get(user.id))}
+
+
 @app.get("/api/users/search")
 async def search_users(
     q: str = Query(..., min_length=1),
@@ -668,6 +685,7 @@ async def websocket_messages(ws: WebSocket, token: str):
         return
 
     await manager.connect(user.id, ws)
+    await manager.broadcast_status(user.auth_id, online=True)
     try:
         while True:
             raw = await ws.receive_text()
@@ -676,7 +694,9 @@ async def websocket_messages(ws: WebSocket, token: str):
             except Exception:
                 continue
 
-            if data.get("type") == "typing":
+            msg_type = data.get("type")
+
+            if msg_type == "typing":
                 recipient_username = data.get("recipient_username", "").strip().lower()
                 if not recipient_username:
                     continue
@@ -690,5 +710,24 @@ async def websocket_messages(ws: WebSocket, token: str):
                         "type": "typing",
                         "sender_username": user.auth_id,
                     })
+
+            elif msg_type == "mark_read":
+                # Tell the sender their messages have been read by this user
+                sender_username = data.get("sender_username", "").strip().lower()
+                if not sender_username:
+                    continue
+                db2 = SessionLocal()
+                try:
+                    sender = db2.scalar(select(User).where(User.auth_id == sender_username))
+                finally:
+                    db2.close()
+                if sender:
+                    await manager.send_to_user(sender.id, {
+                        "type": "messages_read",
+                        "reader_username": user.auth_id,
+                    })
+
     except WebSocketDisconnect:
         manager.disconnect(user.id, ws)
+        # Notify contacts that this user went offline
+        await manager.broadcast_status(user.auth_id, online=False)
