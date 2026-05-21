@@ -29,21 +29,36 @@ def _extract_flat(query: str, limit: int) -> List[Dict[str, Any]]:
 
 def _get_stream_url(track_url: str) -> Optional[str]:
     ydl_opts = {
-        "format": "bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "skip_download": True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(track_url, download=False)
-            url = info.get("url")
-            if not url:
-                for fmt in reversed(info.get("formats") or []):
-                    if fmt.get("url") and fmt.get("acodec") != "none":
-                        url = fmt["url"]
-                        break
-            return url
+            formats = info.get("formats") or []
+
+            # SoundCloud exposes both full-track streams and 30-second preview
+            # snippets in the same format list. Preview format IDs contain
+            # "preview" (e.g. "hls-opus-64-preview"). Exclude them first.
+            full = [
+                f for f in formats
+                if f.get("url")
+                and f.get("acodec") != "none"
+                and "preview" not in (f.get("format_id") or "").lower()
+            ]
+            # Fall back to anything audio if all formats happen to be preview-labelled
+            if not full:
+                full = [f for f in formats if f.get("url") and f.get("acodec") != "none"]
+
+            if full:
+                full.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+                url = full[0]["url"]
+                print(f"SoundCloud stream ({full[0].get('format_id', '?')}) for {track_url}")
+                return url
+
+            return info.get("url")
     except Exception as e:
         print(f"SoundCloud stream failed for {track_url}: {e}")
         return None
