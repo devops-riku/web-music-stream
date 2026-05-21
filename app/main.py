@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel
 import asyncio
 import json
+import os
 import uuid
 import httpx
 import secrets
@@ -54,7 +55,7 @@ from app.schemas import (
 )
 from app.soundcloud import soundcloud_api
 from app.ytmusic import ytmusic_api, _enrich_with_itunes
-from app.spotify import spotify_search, spotify_trending, spotify_get_stream_url
+from app.spotify import spotify_search, spotify_trending, spotify_get_stream_url, pipe_cross_search
 from app.settings_service import get_config, invalidate as invalidate_config
 from app.stream_cache import get_cached_url, cache_url
 from app.auth import (
@@ -405,32 +406,12 @@ async def _resolve_raw_url(id: str, db) -> Optional[str]:
     return url
 
 
-@app.get("/api/player/resolve")
-async def resolve_stream(id: str = Query(...), db: Session = Depends(get_db)):
-    """Return a direct URL only for SoundCloud (CDN URLs are safe to expose).
-    For YouTube / Spotify callers should use /api/player/stream instead."""
-    if id.startswith("http"):
-        url = await soundcloud_api.get_stream_url(id)
-    else:
-        # Return proxy URL so the browser never sees a raw YouTube/Spotify URL
-        url = f"/api/player/stream?id={id}"
-    if not url:
-        raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
-    return {"url": url}
-
-
-@app.get("/api/player/stream")
-async def proxy_stream(request: Request, id: str = Query(...), db: Session = Depends(get_db)):
-    """Proxy audio through the backend. Raw upstream URL is never exposed to the browser."""
-    url = await _resolve_raw_url(id, db)
-    if not url:
-        raise HTTPException(status_code=404, detail="Could not extract stream URL.")
-
+async def _url_stream_response(request: Request, url: str) -> StreamingResponse:
+    """Proxy an upstream URL with range-request passthrough."""
     req_headers = {}
     if "range" in request.headers:
         req_headers["Range"] = request.headers["range"]
 
-    # read=None allows the stream to stay open as long as needed
     timeout = httpx.Timeout(connect=15.0, read=None, write=None, pool=None)
     client = httpx.AsyncClient(follow_redirects=True, timeout=timeout)
     upstream = await client.send(
@@ -452,6 +433,86 @@ async def proxy_stream(request: Request, id: str = Query(...), db: Session = Dep
             await client.aclose()
 
     return StreamingResponse(generate(), status_code=upstream.status_code, headers=resp_headers)
+
+
+def _pipe_stream_response(proc, tmp_path: Optional[str]) -> StreamingResponse:
+    """Stream stdout of a yt-dlp process as audio/mp4 (m4a)."""
+    async def generate():
+        try:
+            while True:
+                chunk = await proc.stdout.read(16384)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="audio/mp4",
+        headers={"Content-Type": "audio/mp4"},
+    )
+
+
+@app.get("/api/player/resolve")
+async def resolve_stream(id: str = Query(...), db: Session = Depends(get_db)):
+    """SoundCloud: return direct CDN URL. YouTube/Spotify: return proxy path."""
+    if id.startswith("http"):
+        url = await soundcloud_api.get_stream_url(id)
+        if not url:
+            raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
+        return {"url": url}
+    return {"url": f"/api/player/stream?id={id}"}
+
+
+@app.get("/api/player/stream")
+async def proxy_stream(request: Request, id: str = Query(...), db: Session = Depends(get_db)):
+    """
+    Audio relay endpoint — raw upstream URLs never reach the browser.
+
+    SoundCloud  → resolve CDN URL → httpx proxy (range/seeking supported)
+    YouTube     → Piped/Invidious URL if available (range supported) → yt-dlp pipe (m4a via ffmpeg)
+    Spotify     → yt-dlp ytsearch pipe (m4a via ffmpeg)
+    """
+    cfg = get_config(db)
+
+    # ── SoundCloud ────────────────────────────────────────────────────────────
+    if id.startswith("http"):
+        url = await soundcloud_api.get_stream_url(id)
+        if not url:
+            raise HTTPException(status_code=404, detail="Could not extract stream URL.")
+        return await _url_stream_response(request, url)
+
+    # ── Spotify ───────────────────────────────────────────────────────────────
+    if id.startswith("spotify|"):
+        proc, tmp_path = await pipe_cross_search(id, cfg.yt_format, cfg.yt_cookies)
+        return _pipe_stream_response(proc, tmp_path)
+
+    # ── YouTube ───────────────────────────────────────────────────────────────
+    # 1) Cached URL from a previous Piped/Invidious hit (fast, range-capable)
+    cached = get_cached_url(id)
+    if cached:
+        return await _url_stream_response(request, cached)
+
+    # 2) Try Piped then Invidious (prefer m4a, supports range via URL proxy)
+    url = await ytmusic_api._get_stream_url_piped(id)
+    if not url:
+        url = await ytmusic_api._get_stream_url_invidious(id)
+    if url:
+        cache_url(id, url)
+        return await _url_stream_response(request, url)
+
+    # 3) Fallback: yt-dlp + ffmpeg pipe → guaranteed m4a, no range support
+    proc, tmp_path = await ytmusic_api.pipe_audio(id, cfg.yt_format, cfg.yt_cookies)
+    return _pipe_stream_response(proc, tmp_path)
 
 
 # ─── Jam Rooms ───────────────────────────────────────────────────────────────
