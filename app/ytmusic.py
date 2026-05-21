@@ -6,6 +6,7 @@ import httpx
 import yt_dlp
 from ytmusicapi import YTMusic
 from typing import List, Dict, Any, Optional
+from app.stream_cache import is_healthy, mark_dead
 
 def _hq_thumbnail(thumbnails: list) -> str | None:
     if not thumbnails:
@@ -212,24 +213,32 @@ class YouTubeMusicAPI:
         ]
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             for instance in instances:
+                if not is_healthy(instance):
+                    continue
                 try:
                     r = await client.get(f"{instance}/streams/{video_id}")
                     if r.status_code != 200:
+                        mark_dead(instance)
                         continue
                     if 'application/json' not in r.headers.get('content-type', ''):
+                        mark_dead(instance)
                         continue
                     data = r.json()
                     audio_streams = data.get('audioStreams', [])
-                    # Pick the highest bitrate audio stream
                     audio_streams = [s for s in audio_streams if s.get('url')]
                     if not audio_streams:
+                        mark_dead(instance)
                         continue
-                    audio_streams.sort(key=lambda s: s.get('bitrate', 0), reverse=True)
-                    stream_url = audio_streams[0]['url']
+                    # Prefer m4a (audio/mp4) over webm/opus for browser compatibility
+                    m4a = [s for s in audio_streams if 'mp4' in (s.get('mimeType') or '').lower()]
+                    pool = m4a if m4a else audio_streams
+                    pool.sort(key=lambda s: s.get('bitrate', 0), reverse=True)
+                    stream_url = pool[0]['url']
                     print(f"Piped stream via {instance}")
                     return stream_url
                 except Exception as e:
                     print(f"Piped {instance} failed: {e}")
+                    mark_dead(instance)
         return None
 
     async def _get_stream_url_invidious(self, video_id: str) -> Optional[str]:
@@ -247,11 +256,15 @@ class YouTubeMusicAPI:
         ]
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             for instance in instances:
+                if not is_healthy(instance):
+                    continue
                 try:
                     r = await client.get(f"{instance}/api/v1/videos/{video_id}")
                     if r.status_code != 200:
+                        mark_dead(instance)
                         continue
                     if 'application/json' not in r.headers.get('content-type', ''):
+                        mark_dead(instance)
                         continue
                     data = r.json()
                     audio_formats = [
@@ -259,13 +272,21 @@ class YouTubeMusicAPI:
                         if f.get('type', '').startswith('audio/') and f.get('url')
                     ]
                     if not audio_formats:
+                        mark_dead(instance)
                         continue
-                    audio_formats.sort(key=lambda f: int(f.get('bitrate', '0') if f.get('bitrate') else '0'), reverse=True)
-                    stream_url = audio_formats[0]['url']
+                    # Prefer m4a/AAC over webm/opus
+                    m4a = [f for f in audio_formats if 'mp4' in f.get('type', '').lower()]
+                    pool = m4a if m4a else audio_formats
+                    pool.sort(
+                        key=lambda f: int(f.get('bitrate', '0') if f.get('bitrate') else '0'),
+                        reverse=True,
+                    )
+                    stream_url = pool[0]['url']
                     print(f"Invidious stream via {instance}")
                     return stream_url
                 except Exception as e:
                     print(f"Invidious {instance} failed: {e}")
+                    mark_dead(instance)
         return None
 
 ytmusic_api = YouTubeMusicAPI()

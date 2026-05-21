@@ -781,28 +781,34 @@ function App() {
     }
   };
 
+  const _proxyUrl = (track_id) =>
+    `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track_id)}`;
+
   const playTrackFromQueue = async (queue, track) => {
     setActiveQueue(queue);
 
-    // Resolve stream URL first so we can share it with jam guests.
-    // SoundCloud CDN URLs are not IP-locked, so all guests can use the same URL.
-    if (!track.track_id.startsWith('mock_') && !track.track_id.startsWith('trend_') && !track.track_id.startsWith('hero_')) {
-      try {
-        const res = await fetch(`${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`);
-        if (res.ok) {
-          const { url } = await res.json();
-          if (url) {
-            const resolved = { ...track, preview_url: url };
-            playLocalPreview(resolved, null, 0);
-            setCurrentTrack(resolved);
-            sendJamEvent('track_change', { track: resolved });
-            return;
-          }
-        }
-      } catch {}
+    const isMock = track.track_id.startsWith('mock_') || track.track_id.startsWith('trend_') || track.track_id.startsWith('hero_');
+    if (!isMock) {
+      let url;
+      if (track.track_id.startsWith('http')) {
+        // SoundCloud: resolve CDN URL (not IP-locked, safe to share with jam guests)
+        try {
+          const res = await fetch(`${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`);
+          if (res.ok) ({ url } = await res.json());
+        } catch {}
+      } else {
+        // YouTube / Spotify: use proxy URL directly — never expose raw upstream URL
+        url = _proxyUrl(track.track_id);
+      }
+      if (url) {
+        const resolved = { ...track, preview_url: url };
+        playLocalPreview(resolved, null, 0);
+        setCurrentTrack(resolved);
+        sendJamEvent('track_change', { track: resolved });
+        return;
+      }
     }
 
-    // Fallback: no pre-resolution (guests will resolve themselves)
     playTrack(track);
     sendJamEvent('track_change', { track });
   };
@@ -831,7 +837,6 @@ function App() {
     setPlaybackMessage(null);
     setCurrentTrack(track);
 
-    // Stop active audio
     if (audioRef.current) {
       audioRef.current.pause();
       setIsPlaying(false);
@@ -848,26 +853,29 @@ function App() {
       return;
     }
 
-    try {
-      // 1) Ask backend to resolve a direct audio URL (backend calls Piped/Invidious server-to-server, no CORS)
-      const resolveRes = await fetch(
-        `${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`
-      );
-      if (resolveRes.ok) {
-        const { url } = await resolveRes.json();
-        if (url) {
-          console.log('[Stream] Resolved via backend');
-          playLocalPreview({ ...track, preview_url: url }, null, startPositionMs);
-          return;
+    if (track.track_id.startsWith('http')) {
+      // SoundCloud: resolve to direct CDN URL (no proxy needed)
+      try {
+        const res = await fetch(`${BACKEND_API}/api/player/resolve?id=${encodeURIComponent(track.track_id)}`);
+        if (res.ok) {
+          const { url } = await res.json();
+          if (url) {
+            playLocalPreview({ ...track, preview_url: url }, null, startPositionMs);
+            return;
+          }
         }
+      } catch (err) {
+        console.warn('[Stream] SoundCloud resolve failed', err);
       }
-    } catch (err) {
-      console.warn('[Stream] Resolve failed, trying full proxy', err);
+    } else {
+      // YouTube / Spotify: backend proxies the stream — raw URL never reaches the browser
+      const proxyUrl = _proxyUrl(track.track_id);
+      playLocalPreview({ ...track, preview_url: proxyUrl }, null, startPositionMs);
+      return;
     }
 
-    // 2) Fall back to full backend proxy stream (proxies the entire audio through the backend)
-    const backendUrl = `${BACKEND_API}/api/player/stream?id=${encodeURIComponent(track.track_id)}`;
-    playLocalPreview({ ...track, preview_url: backendUrl }, null, startPositionMs);
+    // Fallback for SoundCloud resolve failure
+    playLocalPreview({ ...track, preview_url: _proxyUrl(track.track_id) }, null, startPositionMs);
   };
 
 

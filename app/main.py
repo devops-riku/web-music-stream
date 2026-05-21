@@ -56,6 +56,7 @@ from app.soundcloud import soundcloud_api
 from app.ytmusic import ytmusic_api, _enrich_with_itunes
 from app.spotify import spotify_search, spotify_trending, spotify_get_stream_url
 from app.settings_service import get_config, invalidate as invalidate_config
+from app.stream_cache import get_cached_url, cache_url
 from app.auth import (
     hash_password,
     verify_password,
@@ -384,27 +385,44 @@ async def get_liked_tracks(
 # ─── Streaming ───────────────────────────────────────────────────────────────
 
 async def _resolve_url(id: str, db) -> Optional[str]:
-    """Route stream resolution based on track_id format."""
+    """Route stream resolution based on track_id format (no cache — used for SoundCloud only)."""
     cfg = get_config(db)
+    if id.startswith("http"):
+        return await soundcloud_api.get_stream_url(id)
     if id.startswith("spotify|"):
         return await spotify_get_stream_url(id, cfg.yt_format, cfg.yt_cookies)
-    if id.startswith("http"):
-        # SoundCloud URL
-        return await soundcloud_api.get_stream_url(id)
-    # YouTube video ID
     return await ytmusic_api.get_stream_url(id, cfg.yt_format, cfg.yt_cookies)
+
+
+async def _resolve_raw_url(id: str, db) -> Optional[str]:
+    """Resolve with in-memory cache. Used by the proxy stream endpoint."""
+    cached = get_cached_url(id)
+    if cached:
+        return cached
+    url = await _resolve_url(id, db)
+    if url:
+        cache_url(id, url)
+    return url
 
 
 @app.get("/api/player/resolve")
 async def resolve_stream(id: str = Query(...), db: Session = Depends(get_db)):
-    url = await _resolve_url(id, db)
+    """Return a direct URL only for SoundCloud (CDN URLs are safe to expose).
+    For YouTube / Spotify callers should use /api/player/stream instead."""
+    if id.startswith("http"):
+        url = await soundcloud_api.get_stream_url(id)
+    else:
+        # Return proxy URL so the browser never sees a raw YouTube/Spotify URL
+        url = f"/api/player/stream?id={id}"
     if not url:
         raise HTTPException(status_code=404, detail="Could not resolve stream URL.")
     return {"url": url}
 
+
 @app.get("/api/player/stream")
 async def proxy_stream(request: Request, id: str = Query(...), db: Session = Depends(get_db)):
-    url = await _resolve_url(id, db)
+    """Proxy audio through the backend. Raw upstream URL is never exposed to the browser."""
+    url = await _resolve_raw_url(id, db)
     if not url:
         raise HTTPException(status_code=404, detail="Could not extract stream URL.")
 
@@ -412,10 +430,12 @@ async def proxy_stream(request: Request, id: str = Query(...), db: Session = Dep
     if "range" in request.headers:
         req_headers["Range"] = request.headers["range"]
 
-    client = httpx.AsyncClient(follow_redirects=True, timeout=30)
+    # read=None allows the stream to stay open as long as needed
+    timeout = httpx.Timeout(connect=15.0, read=None, write=None, pool=None)
+    client = httpx.AsyncClient(follow_redirects=True, timeout=timeout)
     upstream = await client.send(
         httpx.Request("GET", url, headers=req_headers),
-        stream=True
+        stream=True,
     )
 
     resp_headers = {"Accept-Ranges": "bytes"}
